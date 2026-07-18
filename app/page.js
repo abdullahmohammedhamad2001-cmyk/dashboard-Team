@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import ClipLoader from "react-spinners/ClipLoader";
-import {MdDashboard,MdPeople,MdDirectionsBus,MdRoute,MdSchool} from "react-icons/md";
+import {MdDashboard,MdPeople,MdDirectionsBus,MdRoute,MdSchool,MdViewCarousel,MdBusinessCenter} from "react-icons/md";
 import './style.css';
 import Image from 'next/image'
 import logo from '../images/logo.png'
@@ -14,6 +14,8 @@ import Lines from "../components/lines";
 import Students from "../components/students";
 import Drivers from "../components/drivers";
 import Schools from "../components/schools";
+import Carousel from "../components/carousel";
+import Crm from "../components/crm";
 
 const Dashboard = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -43,6 +45,8 @@ const Dashboard = () => {
     { label: "المدارس", icon: MdSchool },
     { label: "السواق", icon: MdDirectionsBus },
     { label: "الخطوط", icon: MdRoute },
+    { label: "الكارسول العام", icon: MdViewCarousel },
+    { label: "CRM", icon: MdBusinessCenter },
   ];
 
   const renderContent = () => {
@@ -57,6 +61,10 @@ const Dashboard = () => {
         return <Drivers />;
       case "الخطوط":
         return <Lines />;
+      case "الكارسول العام":
+        return <Carousel />;
+      case "CRM":
+        return <Crm />;
       default:
         return <Main />;
     }

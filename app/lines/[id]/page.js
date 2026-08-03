@@ -344,8 +344,8 @@ const LineDetails = () => {
             </div>
 
             <div className="line-details-card">
-                <h2>خط: {line.destination}</h2>
-                <p>{line.line_number} {'رقم الخط'}</p>
+                <h2>{line.line_name || `خط: ${line.destination}`}</h2>
+                <p>{line.line_number} {'رقم الخط'} · {line.destination}</p>
             </div>
 
             <div className="line-section">

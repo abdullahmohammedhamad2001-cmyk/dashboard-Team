@@ -68,7 +68,8 @@ const Students = () => {
 
       {/* Table */}
       <div className="students-table">
-        <div className="table-header">
+        <div className="table-header students-table-grid">
+          <span>الصورة</span>
           <span>الاسم</span>
           <span>المدرسة</span>
           <span>الهاتف</span>
@@ -77,13 +78,23 @@ const Students = () => {
 
         {loading ? (
           <div className="loader">
-            <ClipLoader size={30} color="#3b82f6" />
+            <ClipLoader size={30} color="#8a6115" />
           </div>
         ) : filteredStudents.length === 0 ? (
           <div className="empty">لا يوجد طلاب</div>
         ) : (
           filteredStudents.map((student) => (
-            <div key={student.id} className="table-row">
+            <div key={student.id} className="table-row students-table-grid">
+              <span className="student-row-photo">
+                {student.photo_url ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={student.photo_url} alt={student.name || "صورة الطالب"} />
+                ) : (
+                  <div className="student-row-photo-placeholder">
+                    {student.name?.trim()?.charAt(0) || "?"}
+                  </div>
+                )}
+              </span>
               <span>{student.name} {student.parent_name}</span>
               <span>{schoolMap[student.school_id] || "-"}</span>
               <span className="phone-number">{student.phone_number || "-"}</span>

@@ -2,7 +2,7 @@
 
 import React, { useMemo,useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { collection,query,where,getDocs,doc,runTransaction,serverTimestamp } from "firebase/firestore";
+import { collection,query,where,orderBy,limit,getDocs,addDoc,doc,runTransaction,serverTimestamp } from "firebase/firestore";
 import { DB } from "../../../firebaseConfig";
 import {useGlobalState} from '../../../globalState';
 import { Modal } from "antd";
@@ -13,14 +13,161 @@ import "../../style.css";
 const SchoolDetails = () => {
     const { id } = useParams();
     const router = useRouter();
-    const { schools, employees, loading } = useGlobalState();
+    const { schools, employees, students, lines, drivers, loading } = useGlobalState();
 
     const [openOwnerModal, setOpenOwnerModal] = useState(false);
     const [ownerName, setOwnerName] = useState("");
     const [ownerPhone, setOwnerPhone] = useState("");
     const [loadingOwner, setLoadingOwner] = useState(false);
 
+    const [studentSearch, setStudentSearch] = useState("");
+    const [assignStudent, setAssignStudent] = useState(null);
+    const [selectedLine, setSelectedLine] = useState(null);
+    const [loadingAssign, setLoadingAssign] = useState(false);
+
+    const [openLineModal, setOpenLineModal] = useState(false);
+    const [newLineName, setNewLineName] = useState("");
+    const [loadingLine, setLoadingLine] = useState(false);
+
     const school = schools.find((s) => s.id === id);
+
+    const driverById = useMemo(
+        () => new Map((drivers || []).map((d) => [d.id, d])),
+        [drivers]
+    );
+
+    // Every line that belongs to this school (a school may have many)
+    const schoolLines = useMemo(
+        () => (lines || []).filter((l) => l.school_id === id),
+        [lines, id]
+    );
+
+    const lineById = useMemo(
+        () => new Map(schoolLines.map((l) => [l.id, l])),
+        [schoolLines]
+    );
+
+    const schoolStudents = useMemo(() => {
+        const list = (students || []).filter((s) => s.school_id === id);
+        const term = studentSearch.trim();
+        if (!term) return list;
+        return list.filter(
+            (s) =>
+                s.name?.includes(term) ||
+                s.parent_name?.includes(term) ||
+                s.phone_number?.includes(term)
+        );
+    }, [students, id, studentSearch]);
+
+    const withDriverCount = useMemo(
+        () => schoolStudents.filter((s) => s.driver_id).length,
+        [schoolStudents]
+    );
+
+    // A student may only join a line once its parent account and home location exist
+    const canAssignStudent = (student) =>
+        Boolean(student.linked_parent && student.home_location);
+
+    const getNextLineNumber = async () => {
+        const snap = await getDocs(
+            query(collection(DB, "lines"), orderBy("line_number", "desc"), limit(1))
+        );
+
+        if (snap.empty) return "L001";
+
+        const number = parseInt(snap.docs[0].data().line_number?.replace("L", "")) || 0;
+        return `L${String(number + 1).padStart(3, "0")}`;
+    };
+
+    // A school can hold an unlimited number of lines, each with its own driver
+    const handleCreateLine = async () => {
+        if (!school) return;
+
+        try {
+            setLoadingLine(true);
+
+            const lineNumber = await getNextLineNumber();
+
+            await addDoc(collection(DB, "lines"), {
+                line_number: lineNumber,
+                line_name: newLineName.trim() || `خط ${schoolLines.length + 1}`,
+                destination: school.name,
+                destination_location: school.location || null,
+                school_id: school.id,
+                driver_id: null,
+                driver_name: null,
+                car_type: null,
+                riders: [],
+                created_at: new Date(),
+            });
+
+            alert(`تم إنشاء الخط ${lineNumber} ✅`);
+
+            setNewLineName("");
+            setOpenLineModal(false);
+            window.location.reload();
+        } catch (error) {
+            console.error(error);
+            alert("حدث خطأ أثناء إنشاء الخط");
+        } finally {
+            setLoadingLine(false);
+        }
+    };
+
+    const handleAssignStudentToLine = async () => {
+        if (!assignStudent || !selectedLine) {
+            alert("اختر الخط");
+            return;
+        }
+
+        try {
+            setLoadingAssign(true);
+
+            const lineRef = doc(DB, "lines", selectedLine.id);
+            const studentRef = doc(DB, "students", assignStudent.id);
+
+            let alreadyAssigned = false;
+
+            await runTransaction(DB, async (transaction) => {
+                const lineDoc = await transaction.get(lineRef);
+                const studentDoc = await transaction.get(studentRef);
+
+                if (studentDoc.data()?.line_id) {
+                    alreadyAssigned = true;
+                    return;
+                }
+
+                const riders = lineDoc.data()?.riders || [];
+
+                transaction.update(studentRef, {
+                    line_id: selectedLine.id,
+                    driver_id: lineDoc.data()?.driver_id || null,
+                });
+
+                transaction.update(lineRef, {
+                    riders: riders.includes(assignStudent.id)
+                        ? riders
+                        : [...riders, assignStudent.id],
+                });
+            });
+
+            if (alreadyAssigned) {
+                alert("هذا الطالب مضاف لخط بالفعل");
+                return;
+            }
+
+            alert("تم تعيين السائق للطالب ✅");
+
+            setAssignStudent(null);
+            setSelectedLine(null);
+            window.location.reload();
+        } catch (error) {
+            console.error(error);
+            alert("حدث خطأ أثناء التعيين");
+        } finally {
+            setLoadingAssign(false);
+        }
+    };
 
     // ✅ Group employees by job_title
     const groupedEmployees = useMemo(() => {
@@ -169,7 +316,7 @@ const SchoolDetails = () => {
     if (loading) {
         return (
         <div className="loader">
-            <ClipLoader size={40} color="#3b82f6" />
+            <ClipLoader size={40} color="#8a6115" />
         </div>
         );
     }
@@ -233,6 +380,243 @@ const SchoolDetails = () => {
                     )}
                 </div>
             </div>
+
+            {/* Lines & drivers of this school */}
+            <div className="section">
+                <div className="section-header">
+                    <h3>الخطوط والسائقون ({schoolLines.length})</h3>
+
+                    <div className="create-btn" onClick={() => setOpenLineModal(true)}>
+                        <p>+ إنشاء خط جديد</p>
+                    </div>
+                </div>
+
+                {schoolLines.length === 0 ? (
+                    <div className="empty">لا يوجد خطوط لهذه المدرسة</div>
+                ) : (
+                    <div className="line-cards-grid">
+                        {schoolLines.map((line) => {
+                            const lineDriver = driverById.get(line.driver_id);
+
+                            return (
+                                <div
+                                    key={line.id}
+                                    className="line-card"
+                                    onClick={() => router.push(`/lines/${line.id}`)}
+                                >
+                                    <div className="line-card-driver">
+                                        {lineDriver?.personal_image ? (
+                                            // eslint-disable-next-line @next/next/no-img-element
+                                            <img src={lineDriver.personal_image} alt={lineDriver.name} />
+                                        ) : (
+                                            <div className="driver-avatar-placeholder">
+                                                {lineDriver?.name?.trim()?.charAt(0) || "؟"}
+                                            </div>
+                                        )}
+
+                                        <div>
+                                            <strong>{lineDriver?.name || "بدون سائق"}</strong>
+                                            <small>{lineDriver?.car_type || "لم يتم التعيين"}</small>
+                                        </div>
+                                    </div>
+
+                                    <div className="line-card-meta">
+                                        <span>
+                                            {line.line_name || `الخط ${line.line_number || "-"}`}
+                                        </span>
+                                        <span>{(line.riders || []).length} طالب</span>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                )}
+            </div>
+
+            {/* Students & transport assignment */}
+            <div className="section">
+                <div className="section-header">
+                    <h3>
+                        الطلاب ({schoolStudents.length}) — لديهم سائق: {withDriverCount}
+                    </h3>
+                </div>
+
+                <input
+                    className="school-search"
+                    placeholder="البحث باسم الطالب أو رقم الهاتف..."
+                    value={studentSearch}
+                    onChange={(e) => setStudentSearch(e.target.value)}
+                />
+
+                <div className="school-details-table">
+                    <div className="school-details-table-header school-students-grid">
+                        <span>الصورة</span>
+                        <span>الطالب</span>
+                        <span>الهاتف</span>
+                        <span>السائق / الخط</span>
+                        <span>الإجراء</span>
+                    </div>
+
+                    {schoolStudents.length === 0 ? (
+                        <div className="empty">لا يوجد طلاب</div>
+                    ) : (
+                        schoolStudents.map((student) => {
+                            const studentLine = lineById.get(student.line_id);
+                            const studentDriver = driverById.get(student.driver_id);
+
+                            return (
+                                <div
+                                    key={student.id}
+                                    className="school-details-table-row school-students-grid"
+                                >
+                                    <span className="student-row-photo">
+                                        {student.photo_url ? (
+                                            // eslint-disable-next-line @next/next/no-img-element
+                                            <img src={student.photo_url} alt={student.name} />
+                                        ) : (
+                                            <div className="student-row-photo-placeholder">
+                                                {student.name?.trim()?.charAt(0) || "؟"}
+                                            </div>
+                                        )}
+                                    </span>
+
+                                    <span>{student.name} {student.parent_name}</span>
+
+                                    <span className="phone-number">{student.phone_number || "-"}</span>
+
+                                    <span>
+                                        {studentDriver ? (
+                                            <span className="driver-chip">
+                                                {studentDriver.personal_image ? (
+                                                    // eslint-disable-next-line @next/next/no-img-element
+                                                    <img
+                                                        src={studentDriver.personal_image}
+                                                        alt={studentDriver.name}
+                                                    />
+                                                ) : (
+                                                    <span className="driver-avatar-placeholder small">
+                                                        {studentDriver.name?.trim()?.charAt(0) || "؟"}
+                                                    </span>
+                                                )}
+                                                <span className="driver-chip-text">
+                                                    <strong>{studentDriver.name}</strong>
+                                                    <small>الخط {studentLine?.line_number || "-"}</small>
+                                                </span>
+                                            </span>
+                                        ) : (
+                                            <span className="no-driver-text">لا يوجد سائق</span>
+                                        )}
+                                    </span>
+
+                                    <span>
+                                        {student.driver_id ? (
+                                            <span className="assigned-badge">مُعيَّن</span>
+                                        ) : (
+                                            <button
+                                                className="assign-driver-btn"
+                                                disabled={!canAssignStudent(student)}
+                                                title={
+                                                    canAssignStudent(student)
+                                                        ? "تعيين سائق"
+                                                        : "يجب ربط ولي الأمر وتحديد موقع المنزل أولاً"
+                                                }
+                                                onClick={() => {
+                                                    setAssignStudent(student);
+                                                    setSelectedLine(null);
+                                                }}
+                                            >
+                                                تعيين سائق
+                                            </button>
+                                        )}
+                                    </span>
+                                </div>
+                            );
+                        })
+                    )}
+                </div>
+            </div>
+
+            {/* Assign a student to one of the school lines */}
+            <Modal
+                title="إنشاء خط جديد"
+                open={openLineModal}
+                onCancel={() => setOpenLineModal(false)}
+                footer={null}
+                centered
+            >
+                <div className="create-school-form">
+                    <input
+                        placeholder="اسم الخط (مثال: الخط الشمالي) - اختياري"
+                        value={newLineName}
+                        onChange={(e) => setNewLineName(e.target.value)}
+                    />
+
+                    <p className="modal-hint">
+                        يمكن للمدرسة الواحدة إنشاء عدد غير محدود من الخطوط، ولكل خط سائق خاص به.
+                    </p>
+
+                    {loadingLine ? (
+                        <div className="btn-loading">
+                            <ClipLoader size={15} color="#fff" />
+                        </div>
+                    ) : (
+                        <button className="create-submit" onClick={handleCreateLine}>
+                            إنشاء
+                        </button>
+                    )}
+                </div>
+            </Modal>
+
+            <Modal
+                title={`تعيين سائق - ${assignStudent?.name || ""}`}
+                open={Boolean(assignStudent)}
+                onCancel={() => {
+                    setAssignStudent(null);
+                    setSelectedLine(null);
+                }}
+                footer={null}
+                centered
+            >
+                <div className="create-school-form">
+                    {schoolLines.length === 0 ? (
+                        <p className="empty">لا يوجد خطوط لهذه المدرسة، أنشئ خطاً أولاً</p>
+                    ) : (
+                        <div className="drivers-list">
+                            {schoolLines.map((line) => {
+                                const lineDriver = driverById.get(line.driver_id);
+
+                                return (
+                                    <div
+                                        key={line.id}
+                                        className={`driver-item ${selectedLine?.id === line.id ? "active" : ""}`}
+                                        onClick={() => setSelectedLine(line)}
+                                    >
+                                        <p>
+                                            {line.line_name || `الخط ${line.line_number || "-"}`} —{" "}
+                                            {lineDriver?.name || "بدون سائق"}
+                                        </p>
+                                        <span>{(line.riders || []).length} طالب</span>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
+
+                    {loadingAssign ? (
+                        <div className="btn-loading">
+                            <ClipLoader size={15} color="#fff" />
+                        </div>
+                    ) : (
+                        <button
+                            className={`create-submit ${!selectedLine ? "disabled-button" : ""}`}
+                            onClick={handleAssignStudentToLine}
+                            disabled={!selectedLine}
+                        >
+                            تعيين
+                        </button>
+                    )}
+                </div>
+            </Modal>
 
             {/* Modal */}
             <Modal

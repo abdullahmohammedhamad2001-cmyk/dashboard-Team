@@ -190,6 +190,7 @@ const Schools = () => {
       <div className="schools-table">
 
         <div className="table-header school-table-header">
+          <span>الصورة</span>
           <span>المدرسة</span>
           <span>الطلاب</span>
           <span>الموظفين</span>
@@ -207,6 +208,16 @@ const Schools = () => {
               className="table-row school-table-row"
               onClick={() => router.push(`/schools/${school.id}`)}
             >
+              <span className="school-row-logo">
+                {school.logo_url ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={school.logo_url} alt={school.name || "شعار المدرسة"} />
+                ) : (
+                  <div className="school-row-logo-placeholder">
+                    {school.name?.trim()?.charAt(0) || "?"}
+                  </div>
+                )}
+              </span>
               <span className="school-name">{school.name}</span>
               <span>{school.studentsCount}</span>
               <span>{school.employeesCount}</span>

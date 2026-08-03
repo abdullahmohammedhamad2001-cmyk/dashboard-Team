@@ -11,6 +11,7 @@ const initialState = {
   schools: [],
   drivers: [],
   lines: [],
+  bills: [],
   loading: true,
   error: null,
 };
@@ -40,7 +41,7 @@ export const GlobalStateProvider = ({ children }) => {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [studentsSnap, schoolsSnap, driversSnap, linesSnap, teachersSnap, employeesSnap] =
+        const [studentsSnap, schoolsSnap, driversSnap, linesSnap, teachersSnap, employeesSnap, billsSnap] =
           await Promise.all([
             getDocs(collection(DB, "students")),
             getDocs(collection(DB, "schools")),
@@ -48,6 +49,7 @@ export const GlobalStateProvider = ({ children }) => {
             getDocs(collection(DB, "lines")),
             getDocs(collection(DB, "teachers")),
             getDocs(collection(DB, "employees")),
+            getDocs(collection(DB, "student_bills")),
           ]);
 
         const schools = schoolsSnap.docs.map((doc) => ({
@@ -80,9 +82,14 @@ export const GlobalStateProvider = ({ children }) => {
           ...doc.data(),
         }));
 
+        const bills = billsSnap.docs.map((doc) => ({
+          id: doc.id,
+          ...doc.data(),
+        }));
+
         dispatch({
           type: "SET_DATA",
-          payload: { students, schools, drivers, lines, teachers, employees }
+          payload: { students, schools, drivers, lines, teachers, employees, bills }
         });
       } catch (error) {
         dispatch({ type: "ERROR", error });

@@ -7,7 +7,7 @@ import { collection, getDocs, query, where } from "firebase/firestore"
 import { DB } from '../../firebaseConfig'
 import ClipLoader from "react-spinners/ClipLoader"
 import Image from 'next/image'
-import logo_image from '../../images/logo.png'
+import logo_image from '../../images/notification-icon.png'
 
 const Login = () => {
   const [username,setUsername] = useState('')
@@ -57,9 +57,9 @@ const Login = () => {
         <div className="login-logo">
           <Image
             src={logo_image}
-            width={70}
-            height={70}
-            alt="logo"
+            width={88}
+            height={88}
+            alt="شعار لوحة تحكم التيم"
           />
         </div>
 

@@ -10,7 +10,7 @@ import { Modal } from "antd";
 import "../app/style.css";
 
 const Lines = () => {
-  const { lines, schools, loading } = useGlobalState();
+  const { lines, schools, drivers, loading } = useGlobalState();
   const router = useRouter();
 
   const [nameFilter, setNameFilter] = useState("");
@@ -18,12 +18,33 @@ const Lines = () => {
   const [driverFilter, setDriverFilter] = useState("all");
   const [openModal, setOpenModal] = useState(false);
   const [selectedSchool, setSelectedSchool] = useState("");
+  const [newLineName, setNewLineName] = useState("");
   const [loadingCreate, setLoadingCreate] = useState(false);
+
+  const driverById = useMemo(
+    () => new Map((drivers || []).map((d) => [d.id, d])),
+    [drivers]
+  );
+
+  const schoolById = useMemo(
+    () => new Map((schools || []).map((s) => [s.id, s])),
+    [schools]
+  );
 
   // ✅ Filter + Sort
   const filteredLines = useMemo(() => {
+  const term = nameFilter.trim();
+
   const filtered = lines.filter((line) => {
-    if (nameFilter && !line.line_number?.includes(nameFilter)) return false;
+    if (term) {
+      const driverName = driverById.get(line.driver_id)?.name || "";
+      const matches =
+        line.line_number?.includes(term) ||
+        line.line_name?.includes(term) ||
+        line.destination?.includes(term) ||
+        driverName.includes(term);
+      if (!matches) return false;
+    }
     if (schoolFilter !== "all" && line.school_id !== schoolFilter) return false;
 
     if (driverFilter === "yes" && !line.driver_id) return false;
@@ -38,7 +59,12 @@ const Lines = () => {
     const numB = parseInt(b.line_number?.replace("L", "")) || 0;
     return numA - numB;
   });
-}, [lines, nameFilter, schoolFilter, driverFilter]);
+}, [lines, nameFilter, schoolFilter, driverFilter, driverById]);
+
+  const linesWithDriver = useMemo(
+    () => lines.filter((l) => l.driver_id).length,
+    [lines]
+  );
 
   const openCreateModal = () => setOpenModal(true);
 
@@ -86,9 +112,13 @@ const Lines = () => {
 
       const formattedNumber = await getNextLineNumber();
 
+      // A school may own any number of lines, each with its own driver
+      const schoolLinesCount = lines.filter((l) => l.school_id === school.id).length;
+
       // ✅ Create doc
       await addDoc(collection(DB, "lines"), {
         line_number: formattedNumber,
+        line_name: newLineName.trim() || `خط ${schoolLinesCount + 1}`,
         destination: school.name,
         destination_location: school.location || null,
         school_id: school.id,
@@ -103,6 +133,7 @@ const Lines = () => {
 
       // reset
       setSelectedSchool("");
+      setNewLineName("");
       closeCreateModal();
 
     } catch (error) {
@@ -139,9 +170,21 @@ const Lines = () => {
             {schools.map((s) => (
               <option key={s.id} value={s.id}>
                 {s.name}
+                {" "}
+                ({lines.filter((l) => l.school_id === s.id).length} خط)
               </option>
             ))}
           </select>
+
+          <input
+            placeholder="اسم الخط (مثال: الخط الشمالي) - اختياري"
+            value={newLineName}
+            onChange={(e) => setNewLineName(e.target.value)}
+          />
+
+          <p className="modal-hint">
+            يمكن للمدرسة الواحدة امتلاك عدد غير محدود من الخطوط، ولكل خط سائق خاص به.
+          </p>
 
           {loadingCreate ? (
             <div className="btn-loading">
@@ -155,10 +198,16 @@ const Lines = () => {
         </div>
       </Modal>
 
+      <div className="lines-summary">
+        <span>إجمالي الخطوط: <strong>{lines.length}</strong></span>
+        <span>لها سائق: <strong>{linesWithDriver}</strong></span>
+        <span>بلا سائق: <strong>{lines.length - linesWithDriver}</strong></span>
+      </div>
+
       {/* Filter */}
       <div className="lines-filters">
         <input
-          placeholder="البحث برقم الخط..."
+          placeholder="البحث برقم الخط أو المدرسة أو السائق..."
           value={nameFilter}
           onChange={(e) => setNameFilter(e.target.value)}
         />
@@ -191,27 +240,66 @@ const Lines = () => {
           <span>الوجهة</span>
           <span>السائق</span>
           <span>عدد الطلاب</span>
+          <span>الحالة</span>
         </div>
 
         {loading ? (
           <div className="loader">
-            <ClipLoader size={30} color="#3b82f6" />
+            <ClipLoader size={30} color="#8a6115" />
           </div>
         ) : filteredLines.length === 0 ? (
           <div className="empty">لا يوجد خطوط</div>
         ) : (
-          filteredLines.map((line) => (
-            <div 
-              key={line.id} 
-              className="lines-table-row"
-              onClick={() => router.push(`/lines/${line.id}`)}
-            >
-              <span>{line.line_number}</span>
-              <span>{line.destination || "-"}</span>
-              <span>{line.driver_id || "-"}</span>
-              <span>{line.riders.length || 0}</span>
-            </div>
-          ))
+          filteredLines.map((line) => {
+            const lineDriver = driverById.get(line.driver_id);
+            const school = schoolById.get(line.school_id);
+
+            return (
+              <div
+                key={line.id}
+                className="lines-table-row"
+                onClick={() => router.push(`/lines/${line.id}`)}
+              >
+                <span className="line-number-cell">{line.line_number}</span>
+
+                <span className="line-destination-cell">
+                  <strong>{school?.name || line.destination || "-"}</strong>
+                  <small>{line.line_name || line.destination}</small>
+                </span>
+
+                <span>
+                  {lineDriver ? (
+                    <span className="driver-chip">
+                      {lineDriver.personal_image ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={lineDriver.personal_image} alt={lineDriver.name} />
+                      ) : (
+                        <span className="driver-avatar-placeholder small">
+                          {lineDriver.name?.trim()?.charAt(0) || "؟"}
+                        </span>
+                      )}
+                      <span className="driver-chip-text">
+                        <strong>{lineDriver.name}</strong>
+                        <small>{lineDriver.car_type || lineDriver.phone_number}</small>
+                      </span>
+                    </span>
+                  ) : (
+                    <span className="no-driver-text">بدون سائق</span>
+                  )}
+                </span>
+
+                <span>{line.riders?.length || 0}</span>
+
+                <span>
+                  {line.driver_id ? (
+                    <span className="assigned-badge">نشط</span>
+                  ) : (
+                    <span className="pending-badge">بانتظار سائق</span>
+                  )}
+                </span>
+              </div>
+            );
+          })
         )}
 
       </div>

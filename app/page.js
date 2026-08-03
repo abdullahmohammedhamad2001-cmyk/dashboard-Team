@@ -6,7 +6,7 @@ import ClipLoader from "react-spinners/ClipLoader";
 import {MdDashboard,MdPeople,MdDirectionsBus,MdRoute,MdSchool,MdViewCarousel,MdBusinessCenter} from "react-icons/md";
 import './style.css';
 import Image from 'next/image'
-import logo from '../images/logo.png'
+import logo from '../images/notification-icon.png'
 
 // Components
 import Main from "../components/main";
@@ -34,7 +34,7 @@ const Dashboard = () => {
   if (!isAuthenticated) {
     return (
       <div className="loader-container">
-        <ClipLoader color="#3b82f6" size={50} />
+        <ClipLoader color="#8a6115" size={50} />
       </div>
     );
   }
@@ -78,9 +78,9 @@ const Dashboard = () => {
         <div className="sidebar-header">
           <Image
             src={logo}
-            width={50}
-            height={50}
-            alt='logo image'
+            width={54}
+            height={54}
+            alt='شعار لوحة تحكم التيم'
             style={{objectFit:'contain'}}
           />
         </div>

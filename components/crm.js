@@ -15,6 +15,7 @@ import {
 import { DB } from "../firebaseConfig";
 import { Modal } from "antd";
 import ClipLoader from "react-spinners/ClipLoader";
+import { MdEdit, MdSearch } from "react-icons/md";
 import ExcelJS from "exceljs";
 import { saveAs } from "file-saver";
 import "../app/style.css";
@@ -146,9 +147,11 @@ const Crm = () => {
   const [leads, setLeads] = useState([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState("الكل");
+  const [searchTerm, setSearchTerm] = useState("");
 
   const [openAddModal, setOpenAddModal] = useState(false);
   const [openEditModal, setOpenEditModal] = useState(false);
+  const [openFormEditModal, setOpenFormEditModal] = useState(false);
   const [selectedLead, setSelectedLead] = useState(null);
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
@@ -173,9 +176,20 @@ const Crm = () => {
   }, []);
 
   const filteredLeads = useMemo(() => {
-    if (statusFilter === "الكل") return leads;
-    return leads.filter((l) => l.lead_status === statusFilter);
-  }, [leads, statusFilter]);
+    const term = searchTerm.trim().toLowerCase();
+
+    return leads.filter((l) => {
+      if (statusFilter !== "الكل" && l.lead_status !== statusFilter) return false;
+      if (!term) return true;
+
+      return (
+        String(l.institution_name || "").toLowerCase().includes(term) ||
+        String(l.phone || "").toLowerCase().includes(term) ||
+        String(l.crm_id || "").toLowerCase().includes(term) ||
+        String(l.assigned_marketer || "").toLowerCase().includes(term)
+      );
+    });
+  }, [leads, statusFilter, searchTerm]);
 
   const stats = useMemo(() => {
     const total = leads.length;
@@ -219,21 +233,81 @@ const Crm = () => {
 
   // 🔹 Open edit modal with existing lead data
   const handleOpenEdit = (lead) => {
+    const availableCities = IRAQ_CITIES_BY_PROVINCE[lead.province] || [];
+
     setSelectedLead(lead);
     setForm({ ...emptyForm, ...lead });
+    setManualCity(Boolean(lead.city && !availableCities.includes(lead.city)));
     setOpenEditModal(true);
+  };
+
+  // 🔹 Open the form-only edit modal (same fields as the add form)
+  const handleOpenFormEdit = (lead) => {
+    const availableCities = IRAQ_CITIES_BY_PROVINCE[lead.province] || [];
+
+    setSelectedLead(lead);
+    setForm({ ...emptyForm, ...lead });
+    setManualCity(Boolean(lead.city && !availableCities.includes(lead.city)));
+    setOpenFormEditModal(true);
+  };
+
+  // 🔹 Save only the form fields, leaving pipeline data untouched
+  const handleSaveFormEdit = async () => {
+    if (!selectedLead) return;
+
+    if (!form.institution_name || !form.assigned_marketer || !form.phone) {
+      alert("يرجى تعبئة اسم المؤسسة، اسم المسوق، ورقم الهاتف على الأقل");
+      return;
+    }
+
+    try {
+      setSaving(true);
+
+      await updateDoc(doc(DB, "crm_leads", selectedLead.id), {
+        institution_name: form.institution_name,
+        assigned_marketer: form.assigned_marketer,
+        province: form.province,
+        city: form.city,
+        type: form.type,
+        lead_source: form.lead_source,
+        contact_person: form.contact_person,
+        position: form.position,
+        phone: form.phone,
+        email: form.email,
+        student_count: form.student_count,
+        notes: form.notes,
+        updated_at: serverTimestamp(),
+      });
+
+      setOpenFormEditModal(false);
+      setSelectedLead(null);
+      fetchLeads();
+    } catch (error) {
+      console.error(error);
+      alert("حدث خطأ أثناء تحديث بيانات الاستمارة");
+    } finally {
+      setSaving(false);
+    }
   };
 
   // 🔹 Save edits (pipeline stage/dates/status)
   const handleSaveEdit = async () => {
     if (!selectedLead) return;
 
+    if (!form.institution_name || !form.assigned_marketer || !form.phone) {
+      alert("يرجى تعبئة اسم المؤسسة، اسم المسوق، ورقم الهاتف على الأقل");
+      return;
+    }
+
     try {
       setSaving(true);
 
       const { id, crm_id, created_at, ...rest } = form;
 
-      await updateDoc(doc(DB, "crm_leads", selectedLead.id), rest);
+      await updateDoc(doc(DB, "crm_leads", selectedLead.id), {
+        ...rest,
+        updated_at: serverTimestamp(),
+      });
 
       setOpenEditModal(false);
       setSelectedLead(null);
@@ -364,7 +438,7 @@ const Crm = () => {
   if (loading) {
     return (
       <div className="loader">
-        <ClipLoader size={40} color="#3b82f6" />
+        <ClipLoader size={40} color="#8a6115" />
       </div>
     );
   }
@@ -433,6 +507,21 @@ const Crm = () => {
           </div>
         </div>
 
+        {/* Search */}
+        <div className="crm-search-wrapper">
+          <MdSearch size={18} className="crm-search-icon" />
+          <input
+            className="crm-search-input"
+            type="search"
+            placeholder="ابحث باسم المدرسة أو رقم الهاتف..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
+          {searchTerm && (
+            <span className="crm-search-count">{filteredLeads.length} نتيجة</span>
+          )}
+        </div>
+
         {/* Status filter */}
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
           {["الكل", ...LEAD_STATUSES].map((s) => (
@@ -454,14 +543,15 @@ const Crm = () => {
           ))}
         </div>
 
-        <div className="school-details-table">
-          <div className="school-details-table-header">
+        <div className="school-details-table crm-table">
+          <div className="school-details-table-header crm-table-grid">
             <span>CRM ID</span>
             <span>المؤسسة</span>
             <span>المسوق</span>
             <span>المرحلة</span>
             <span>الهاتف</span>
             <span>الصفقة</span>
+            <span>تعديل</span>
             <span>حذف</span>
           </div>
 
@@ -471,8 +561,7 @@ const Crm = () => {
             filteredLeads.map((lead) => (
               <div
                 key={lead.id}
-                className="school-details-table-row"
-                style={{ cursor: "pointer" }}
+                className="school-details-table-row crm-table-grid"
                 onClick={() => handleOpenEdit(lead)}
               >
                 <span>{lead.crm_id}</span>
@@ -486,6 +575,18 @@ const Crm = () => {
                   ) : (
                     <span style={{ color: "#b45309" }}>جارية</span>
                   )}
+                </span>
+                <span>
+                  <button
+                    className="crm-edit-button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleOpenFormEdit(lead);
+                    }}
+                  >
+                    <MdEdit size={16} />
+                    تعديل الاستمارة
+                  </button>
                 </span>
                 <span>
                   <button
@@ -638,16 +739,263 @@ const Crm = () => {
         </div>
       </Modal>
 
+      {/* Edit Form Modal - same fields as the add form */}
+      <Modal
+        title={`تعديل الاستمارة - ${selectedLead?.crm_id || ""}`}
+        open={openFormEditModal}
+        onCancel={() => {
+          setOpenFormEditModal(false);
+          setSelectedLead(null);
+        }}
+        footer={null}
+        centered
+        width={600}
+      >
+        <div className="create-school-form">
+          <input
+            placeholder="اسم المؤسسة التعليمية"
+            value={form.institution_name}
+            onChange={(e) => setForm({ ...form, institution_name: e.target.value })}
+          />
+          <input
+            placeholder="اسم المسوق المسؤول"
+            value={form.assigned_marketer}
+            onChange={(e) => setForm({ ...form, assigned_marketer: e.target.value })}
+          />
+          <select
+            value={form.province}
+            onChange={(e) => {
+              const newProvince = e.target.value;
+              setManualCity(false);
+              setForm({
+                ...form,
+                province: newProvince,
+                city: IRAQ_CITIES_BY_PROVINCE[newProvince]?.[0] || "",
+              });
+            }}
+          >
+            {IRAQ_PROVINCES.map((p) => (
+              <option key={p} value={p}>{p}</option>
+            ))}
+          </select>
+
+          {manualCity ? (
+            <input
+              placeholder="اكتب اسم المدينة يدويًا"
+              value={form.city}
+              onChange={(e) => setForm({ ...form, city: e.target.value })}
+            />
+          ) : (
+            <select
+              value={form.city}
+              onChange={(e) => {
+                if (e.target.value === OTHER_CITY_OPTION) {
+                  setManualCity(true);
+                  setForm({ ...form, city: "" });
+                } else {
+                  setForm({ ...form, city: e.target.value });
+                }
+              }}
+            >
+              {(IRAQ_CITIES_BY_PROVINCE[form.province] || []).map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+              <option value={OTHER_CITY_OPTION}>{OTHER_CITY_OPTION}</option>
+            </select>
+          )}
+
+          <select
+            value={form.type}
+            onChange={(e) => setForm({ ...form, type: e.target.value })}
+          >
+            {INSTITUTION_TYPES.map((t) => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+          </select>
+
+          <select
+            value={form.lead_source}
+            onChange={(e) => setForm({ ...form, lead_source: e.target.value })}
+          >
+            {LEAD_SOURCES.map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+
+          <input
+            placeholder="اسم الشخص المسؤول (جهة الاتصال)"
+            value={form.contact_person}
+            onChange={(e) => setForm({ ...form, contact_person: e.target.value })}
+          />
+          <input
+            placeholder="المسمى الوظيفي (مدير، مالك...)"
+            value={form.position}
+            onChange={(e) => setForm({ ...form, position: e.target.value })}
+          />
+          <input
+            placeholder="رقم الهاتف"
+            value={form.phone}
+            onChange={(e) => setForm({ ...form, phone: e.target.value })}
+          />
+          <input
+            placeholder="البريد الإلكتروني"
+            value={form.email}
+            onChange={(e) => setForm({ ...form, email: e.target.value })}
+          />
+          <input
+            placeholder="العدد التقريبي للطلاب"
+            type="number"
+            value={form.student_count}
+            onChange={(e) => setForm({ ...form, student_count: e.target.value })}
+          />
+          <textarea
+            placeholder="ملاحظات"
+            rows={3}
+            value={form.notes}
+            onChange={(e) => setForm({ ...form, notes: e.target.value })}
+          />
+
+          {saving ? (
+            <div className="btn-loading">
+              <ClipLoader size={15} color="#fff" />
+            </div>
+          ) : (
+            <button className="create-submit" onClick={handleSaveFormEdit}>
+              حفظ التعديلات
+            </button>
+          )}
+        </div>
+      </Modal>
+
       {/* Edit Lead Modal - full pipeline management */}
       <Modal
         title={`تحديث بيانات العميل - ${selectedLead?.crm_id || ""}`}
         open={openEditModal}
-        onCancel={() => setOpenEditModal(false)}
+        onCancel={() => {
+          setOpenEditModal(false);
+          setSelectedLead(null);
+        }}
         footer={null}
         centered
-        width={650}
+        width={760}
       >
-        <div className="create-school-form">
+        <div className="create-school-form crm-edit-form">
+          <label style={labelStyle}>تاريخ تسجيل العميل</label>
+          <input
+            type="date"
+            value={form.lead_date}
+            onChange={(e) => setForm({ ...form, lead_date: e.target.value })}
+          />
+
+          <label style={labelStyle}>اسم المؤسسة التعليمية</label>
+          <input
+            value={form.institution_name}
+            onChange={(e) => setForm({ ...form, institution_name: e.target.value })}
+          />
+
+          <label style={labelStyle}>اسم المسوق المسؤول</label>
+          <input
+            value={form.assigned_marketer}
+            onChange={(e) => setForm({ ...form, assigned_marketer: e.target.value })}
+          />
+
+          <label style={labelStyle}>المحافظة</label>
+          <select
+            value={form.province}
+            onChange={(e) => {
+              const newProvince = e.target.value;
+              setManualCity(false);
+              setForm({
+                ...form,
+                province: newProvince,
+                city: IRAQ_CITIES_BY_PROVINCE[newProvince]?.[0] || "",
+              });
+            }}
+          >
+            {IRAQ_PROVINCES.map((province) => (
+              <option key={province} value={province}>{province}</option>
+            ))}
+          </select>
+
+          <label style={labelStyle}>المدينة</label>
+          {manualCity ? (
+            <input
+              placeholder="اكتب اسم المدينة يدويًا"
+              value={form.city}
+              onChange={(e) => setForm({ ...form, city: e.target.value })}
+            />
+          ) : (
+            <select
+              value={form.city}
+              onChange={(e) => {
+                if (e.target.value === OTHER_CITY_OPTION) {
+                  setManualCity(true);
+                  setForm({ ...form, city: "" });
+                } else {
+                  setForm({ ...form, city: e.target.value });
+                }
+              }}
+            >
+              {(IRAQ_CITIES_BY_PROVINCE[form.province] || []).map((city) => (
+                <option key={city} value={city}>{city}</option>
+              ))}
+              <option value={OTHER_CITY_OPTION}>{OTHER_CITY_OPTION}</option>
+            </select>
+          )}
+
+          <label style={labelStyle}>نوع المؤسسة</label>
+          <select
+            value={form.type}
+            onChange={(e) => setForm({ ...form, type: e.target.value })}
+          >
+            {INSTITUTION_TYPES.map((type) => (
+              <option key={type} value={type}>{type}</option>
+            ))}
+          </select>
+
+          <label style={labelStyle}>مصدر العميل</label>
+          <select
+            value={form.lead_source}
+            onChange={(e) => setForm({ ...form, lead_source: e.target.value })}
+          >
+            {LEAD_SOURCES.map((source) => (
+              <option key={source} value={source}>{source}</option>
+            ))}
+          </select>
+
+          <label style={labelStyle}>اسم الشخص المسؤول</label>
+          <input
+            value={form.contact_person}
+            onChange={(e) => setForm({ ...form, contact_person: e.target.value })}
+          />
+
+          <label style={labelStyle}>المسمى الوظيفي</label>
+          <input
+            value={form.position}
+            onChange={(e) => setForm({ ...form, position: e.target.value })}
+          />
+
+          <label style={labelStyle}>رقم الهاتف</label>
+          <input
+            value={form.phone}
+            onChange={(e) => setForm({ ...form, phone: e.target.value })}
+          />
+
+          <label style={labelStyle}>البريد الإلكتروني</label>
+          <input
+            type="email"
+            value={form.email}
+            onChange={(e) => setForm({ ...form, email: e.target.value })}
+          />
+
+          <label style={labelStyle}>العدد التقريبي للطلاب</label>
+          <input
+            type="number"
+            min="0"
+            value={form.student_count}
+            onChange={(e) => setForm({ ...form, student_count: e.target.value })}
+          />
+
           <label style={labelStyle}>مرحلة العميل</label>
           <select
             value={form.lead_status}

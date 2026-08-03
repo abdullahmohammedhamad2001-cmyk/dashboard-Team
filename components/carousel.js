@@ -96,7 +96,7 @@ const Carousel = () => {
     if (loading) {
         return (
             <div className="loader">
-                <ClipLoader size={40} color="#3b82f6" />
+                <ClipLoader size={40} color="#8a6115" />
             </div>
         );
     }

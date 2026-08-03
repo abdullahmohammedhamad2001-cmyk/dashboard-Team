@@ -5,7 +5,7 @@ import { addDoc, collection } from "firebase/firestore";
 import { DB } from "../../firebaseConfig";
 import ClipLoader from "react-spinners/ClipLoader"
 import Image from 'next/image'
-import logo_image from '../../images/logo.png'
+import logo_image from '../../images/notification-icon.png'
 
 const DeleteAccountRequest = () => {
   const [phoneNumber, setPhoneNumber] = useState("");
@@ -47,7 +47,7 @@ const DeleteAccountRequest = () => {
             src={logo_image}
             width={80}
             height={80}
-            alt='logo image'
+            alt='شعار لوحة تحكم التيم'
             style={{objectFit:'contain'}}
           />
         </div>
@@ -63,7 +63,7 @@ const DeleteAccountRequest = () => {
               style={{width:'250px'}}
             />
             {loading ? (
-              <div style={{ width:'250px',padding:'12px 0',backgroundColor:'#955BFE',borderRadius:'10px',display:'flex',alignItems:'center',justifyContent:'center'}}>
+              <div style={{ width:'250px',padding:'12px 0',backgroundColor:'#8a6115',borderRadius:'10px',display:'flex',alignItems:'center',justifyContent:'center'}}>
                 <ClipLoader
                   color={'#fff'}
                   loading={loading}

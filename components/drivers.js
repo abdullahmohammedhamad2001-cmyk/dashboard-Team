@@ -1,8 +1,8 @@
 "use client";
 
 import React, { useState, useMemo } from "react";
-import { doc, getDoc, setDoc } from "firebase/firestore";
-import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { doc, getDoc, setDoc, deleteDoc, updateDoc, collection, query, where, getDocs } from "firebase/firestore";
+import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 import { DB } from "../firebaseConfig";
 import { useGlobalState } from "../globalState";
 import { useRouter } from "next/navigation";
@@ -24,6 +24,8 @@ const Drivers = () => {
   const [driverPersonalImageFile, setDriverPersonalImageFile] = useState(null);
   const [driverCarImageFile, setDriverCarImageFile] = useState(null);
   const [loadingCreate, setLoadingCreate] = useState(false);
+  const [newDriverCredentials, setNewDriverCredentials] = useState(null);
+  const [deletingId, setDeletingId] = useState(null);
 
   const filteredDrivers = useMemo(() => {
     return drivers.filter((d) =>
@@ -144,6 +146,9 @@ const Drivers = () => {
 
       alert("تم إنشاء السائق بنجاح ✅");
 
+      // ✅ Show login credentials to the admin
+      setNewDriverCredentials({ username: normalizedPhone, password });
+
       // ✅ Reset
       closeCreateModal();
       setDriverName("");
@@ -159,6 +164,46 @@ const Drivers = () => {
       alert("حدث خطأ أثناء إنشاء السائق");
     } finally {
       setLoadingCreate(false);
+    }
+  };
+
+  // 🗑️ Delete driver and all related data
+  const handleDeleteDriver = async (driver) => {
+    if (!confirm(`هل تريد حذف السائق "${driver.name}" نهائياً؟ سيتم حذف جميع بياناته وإخراجه من التطبيق`)) return;
+
+    try {
+      setDeletingId(driver.id);
+
+      // ✅ Unassign driver from any lines
+      const linesQuery = query(collection(DB, "lines"), where("driver_id", "==", driver.id));
+      const linesSnap = await getDocs(linesQuery);
+      await Promise.all(
+        linesSnap.docs.map((lineDoc) => updateDoc(doc(DB, "lines", lineDoc.id), { driver_id: null }))
+      );
+
+      // ✅ Delete stored images (ignore errors if already missing)
+      const storage = getStorage();
+      await Promise.all(
+        [driver.personal_image, driver.car_image].map(async (url) => {
+          if (!url) return;
+          try {
+            await deleteObject(ref(storage, url));
+          } catch (e) {
+            console.warn("Could not delete image:", e);
+          }
+        })
+      );
+
+      // ✅ Delete driver document (revokes app login)
+      await deleteDoc(doc(DB, "drivers", driver.id));
+
+      alert("تم حذف السائق بنجاح ✅");
+      window.location.reload();
+    } catch (error) {
+      console.error(error);
+      alert("حدث خطأ أثناء حذف السائق");
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -255,6 +300,20 @@ const Drivers = () => {
         </div>
       </Modal>
 
+      {/* Credentials Modal */}
+      <Modal
+        title="بيانات دخول السائق"
+        open={!!newDriverCredentials}
+        onCancel={() => setNewDriverCredentials(null)}
+        footer={null}
+        centered
+      >
+        <div className="driver-credentials">
+          <p>رقم الدخول: <strong>{newDriverCredentials?.username}</strong></p>
+          <p>كلمة المرور: <strong>{newDriverCredentials?.password}</strong></p>
+        </div>
+      </Modal>
+
       {/* Filter */}
       <div className="drivers-filters">
         <input
@@ -272,6 +331,7 @@ const Drivers = () => {
           <span>الهاتف</span>
           <span>نوع السيارة</span>
           <span>عدد الخطوط</span>
+          <span>حذف</span>
         </div>
 
         {loading ? (
@@ -302,6 +362,23 @@ const Drivers = () => {
 
               <span>
                 {driver.lines?.length || 0}
+              </span>
+
+              <span>
+                <button
+                  className="delete-btn small"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleDeleteDriver(driver);
+                  }}
+                  disabled={deletingId === driver.id}
+                >
+                  {deletingId === driver.id ? (
+                    <ClipLoader size={12} color="#fff" />
+                  ) : (
+                    "حذف"
+                  )}
+                </button>
               </span>
 
             </div>

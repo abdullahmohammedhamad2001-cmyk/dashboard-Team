@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import ClipLoader from "react-spinners/ClipLoader";
-import {MdDashboard,MdPeople,MdDirectionsBus,MdRoute,MdSchool,MdViewCarousel,MdBusinessCenter} from "react-icons/md";
+import {MdDashboard,MdPeople,MdDirectionsBus,MdRoute,MdSchool,MdViewCarousel,MdBusinessCenter,MdChevronLeft,MdChevronRight} from "react-icons/md";
 import './style.css';
 import Image from 'next/image'
 import logo from '../images/notification-icon.png'
@@ -20,6 +20,7 @@ import Crm from "../components/crm";
 const Dashboard = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [activeSection, setActiveSection] = useState("الرئيسية");
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const router = useRouter();
 
   useEffect(() => {
@@ -74,7 +75,7 @@ const Dashboard = () => {
     <div className="dashboard-container">
 
       {/* Sidebar */}
-      <aside className="sidebar">
+      <aside className={`sidebar ${isSidebarCollapsed ? "collapsed" : ""}`}>
         <div className="sidebar-header">
           <Image
             src={logo}
@@ -95,17 +96,27 @@ const Dashboard = () => {
                 key={link.label}
                 onClick={() => setActiveSection(link.label)}
                 className={`sidebar-link ${isActive ? "active" : ""}`}
+                title={link.label}
               >
                 <Icon size={18} />
-                {link.label}
+                {!isSidebarCollapsed && link.label}
               </div>
             );
           })}
         </div>
+
+        <button
+          type="button"
+          className="sidebar-toggle-btn"
+          onClick={() => setIsSidebarCollapsed((prev) => !prev)}
+          title={isSidebarCollapsed ? "فتح القائمة" : "طي القائمة"}
+        >
+          {isSidebarCollapsed ? <MdChevronLeft size={20} /> : <MdChevronRight size={20} />}
+        </button>
       </aside>
 
       {/* Main */}
-      <main className="main-content">
+      <main className={`main-content ${isSidebarCollapsed ? "expanded" : ""}`}>
         {renderContent()}
       </main>
     </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState, useEffect } from "react";
+import React, { useMemo, useState, useEffect, useRef } from "react";
 import {
   collection,
   addDoc,
@@ -148,6 +148,7 @@ const Crm = () => {
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState("الكل");
   const [searchTerm, setSearchTerm] = useState("");
+  const crmTableRef = useRef(null);
 
   const [openAddModal, setOpenAddModal] = useState(false);
   const [openEditModal, setOpenEditModal] = useState(false);
@@ -543,7 +544,7 @@ const Crm = () => {
           ))}
         </div>
 
-        <div className="school-details-table crm-table">
+        <div className="school-details-table crm-table" ref={crmTableRef}>
           <div className="school-details-table-header crm-table-grid">
             <span>CRM ID</span>
             <span>المؤسسة</span>

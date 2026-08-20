@@ -2,7 +2,7 @@
 
 import React, { useMemo,useState } from "react";
 import { Modal } from "antd";
-import { doc, runTransaction } from "firebase/firestore";
+import { doc, runTransaction, updateDoc } from "firebase/firestore";
 import { DB } from "../../../firebaseConfig";
 import { useParams, useRouter } from "next/navigation";
 import {useGlobalState} from '../../../globalState';
@@ -26,6 +26,9 @@ const LineDetails = () => {
     const [loadingAddStudent, setLoadingAddStudent] = useState(false);
     const [loadingRemoveDriver, setLoadingRemoveDriver] = useState(false);
     const [loadingRemoveStudent, setLoadingRemoveStudent] = useState(null);
+    const [editingSubscriptionId, setEditingSubscriptionId] = useState(null);
+    const [subscriptionInput, setSubscriptionInput] = useState("");
+    const [savingSubscriptionId, setSavingSubscriptionId] = useState(null);
 
     // ✅ Get driver
     const driver = useMemo(() => {
@@ -38,6 +41,12 @@ const LineDetails = () => {
         if (!students || !line) return [];
         return students.filter((s) => s.line_id === line.id);
     }, [students, line]);
+
+    // ✅ Total monthly subscription cost across all students on this line
+    const totalSubscriptionAmount = useMemo(
+        () => lineStudents.reduce((sum, s) => sum + (Number(s.subscription_amount) || 0), 0),
+        [lineStudents]
+    );
 
     //Filter driver list
     const filteredDrivers = useMemo(() => {
@@ -197,9 +206,11 @@ const LineDetails = () => {
                         line_id: line.id,
                     };
 
-                    // 🔥 handle driver case
-                    if (line.driver_id) {
-                        updateData.driver_id = line.driver_id;
+                    // 🔥 handle driver case (read the freshly-fetched line doc, not the
+                    // possibly-stale outer `line` state, to avoid missing a driver
+                    // assigned since this page last loaded)
+                    if (lineDoc.data()?.driver_id) {
+                        updateData.driver_id = lineDoc.data().driver_id;
                     }
 
                     transaction.update(student.ref, updateData);
@@ -233,6 +244,38 @@ const LineDetails = () => {
         setOpenStudentModal(false);
         setSelectedStudents([]);
     }
+
+    //Start editing a student's subscription cost
+    const startEditSubscription = (student) => {
+        setEditingSubscriptionId(student.id);
+        setSubscriptionInput(String(student.subscription_amount || ""));
+    };
+
+    //Save a student's subscription cost
+    const handleSaveSubscription = async (student) => {
+        const amount = Number(subscriptionInput);
+
+        if (!subscriptionInput.trim() || Number.isNaN(amount) || amount < 0) {
+            alert("يرجى إدخال مبلغ صحيح");
+            return;
+        }
+
+        try {
+            setSavingSubscriptionId(student.id);
+
+            await updateDoc(doc(DB, "students", student.id), {
+                subscription_amount: amount,
+            });
+
+            setEditingSubscriptionId(null);
+            router.refresh();
+        } catch (error) {
+            console.error(error);
+            alert("حدث خطأ أثناء حفظ مبلغ الاشتراك");
+        } finally {
+            setSavingSubscriptionId(null);
+        }
+    };
 
     //Remove driver from line
     const handleRemoveDriver = async () => {
@@ -450,6 +493,12 @@ const LineDetails = () => {
                     </div>
                 </div>
 
+                {lineStudents.length > 0 && (
+                    <p style={{ color: "gray", fontSize: "14px", marginTop: "-8px" }}>
+                        إجمالي الاشتراكات الشهرية: <strong>{totalSubscriptionAmount.toLocaleString("ar-IQ")} د.ع</strong>
+                    </p>
+                )}
+
                 {lineStudents.length === 0 ? (
                     <div className="empty">
                      لا يوجد طلاب في هذا الخط
@@ -459,6 +508,7 @@ const LineDetails = () => {
                         <div  className="line-table-header line-details-student-list-item">
                             <span>اسم الطالب</span>
                             <span>رقم الهاتف</span>
+                            <span>تكلفة الاشتراك</span>
                             <div></div>
                         </div>
 
@@ -466,6 +516,39 @@ const LineDetails = () => {
                             <div key={student.id} className="line-table-row line-details-student-list-item">
                                 <span>{student.name} {student.parent_name}</span>
                                 <span className="phone-number">{student.phone_number}</span>
+                                <span>
+                                    {editingSubscriptionId === student.id ? (
+                                        <span style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                                            <input
+                                                type="number"
+                                                min="0"
+                                                value={subscriptionInput}
+                                                onChange={(e) => setSubscriptionInput(e.target.value)}
+                                                style={{ width: "90px", padding: "4px 8px" }}
+                                            />
+                                            {savingSubscriptionId === student.id ? (
+                                                <ClipLoader size={12} />
+                                            ) : (
+                                                <button
+                                                    className="create-btn"
+                                                    style={{ height: "26px", padding: "0 10px" }}
+                                                    onClick={() => handleSaveSubscription(student)}
+                                                >
+                                                    <p style={{ margin: 0 }}>حفظ</p>
+                                                </button>
+                                            )}
+                                        </span>
+                                    ) : (
+                                        <span
+                                            style={{ cursor: "pointer", textDecoration: "underline dotted" }}
+                                            onClick={() => startEditSubscription(student)}
+                                        >
+                                            {student.subscription_amount
+                                                ? `${Number(student.subscription_amount).toLocaleString("ar-IQ")} د.ع`
+                                                : "— تحديد —"}
+                                        </span>
+                                    )}
+                                </span>
                                 <div style={{textAlign:'center'}}>
                                     {loadingRemoveStudent === student.id ? (
                                         <ClipLoader size={12} />

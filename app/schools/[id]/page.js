@@ -1,9 +1,10 @@
 "use client";
 
-import React, { useMemo,useState } from "react";
+import React, { useMemo,useRef,useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { collection,query,where,orderBy,limit,getDocs,addDoc,doc,runTransaction,serverTimestamp } from "firebase/firestore";
+import { collection,query,where,orderBy,limit,getDocs,addDoc,doc,runTransaction,serverTimestamp,writeBatch } from "firebase/firestore";
 import { DB } from "../../../firebaseConfig";
+import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import {useGlobalState} from '../../../globalState';
 import { Modal } from "antd";
 import ClipLoader from "react-spinners/ClipLoader";
@@ -19,6 +20,12 @@ const SchoolDetails = () => {
     const [ownerName, setOwnerName] = useState("");
     const [ownerPhone, setOwnerPhone] = useState("");
     const [loadingOwner, setLoadingOwner] = useState(false);
+
+    const [openNameModal, setOpenNameModal] = useState(false);
+    const [newSchoolName, setNewSchoolName] = useState("");
+    const [loadingName, setLoadingName] = useState(false);
+    const [loadingLogo, setLoadingLogo] = useState(false);
+    const logoInputRef = useRef(null);
 
     const [studentSearch, setStudentSearch] = useState("");
     const [assignStudent, setAssignStudent] = useState(null);
@@ -313,6 +320,114 @@ const SchoolDetails = () => {
         }
     };
 
+    const openRenameModal = () => {
+        setNewSchoolName(school?.name || "");
+        setOpenNameModal(true);
+    };
+
+    // School data is copied into several collections; the school document is written last so a failed run can be retried
+    const applySchoolUpdates = async (targets, value, schoolPatch) => {
+        const updates = [];
+
+        for (const target of targets) {
+            const snap = await getDocs(
+                query(collection(DB, target.col), where("school_id", "==", id))
+            );
+
+            snap.docs.forEach((d) => {
+                if (target.onlyIfExists && d.data()[target.field] === undefined) return;
+                updates.push({ ref: d.ref, data: { [target.field]: value } });
+            });
+        }
+
+        updates.push({ ref: doc(DB, "schools", id), data: schoolPatch });
+
+        for (let i = 0; i < updates.length; i += 400) {
+            const batch = writeBatch(DB);
+            updates.slice(i, i + 400).forEach((u) => batch.update(u.ref, u.data));
+            await batch.commit();
+        }
+    };
+
+    const handleRenameSchool = async () => {
+        const name = newSchoolName.trim().replace(/\s+/g, " ");
+
+        if (!name) {
+            alert("يرجى إدخال اسم المدرسة");
+            return;
+        }
+
+        if (name === school.name) {
+            setOpenNameModal(false);
+            return;
+        }
+
+        try {
+            setLoadingName(true);
+
+            await applySchoolUpdates(
+                [
+                    { col: "schoolAdmins", field: "school", onlyIfExists: true },
+                    { col: "employees", field: "school", onlyIfExists: true },
+                    { col: "teachers", field: "school", onlyIfExists: true },
+                    { col: "students", field: "destination" },
+                    { col: "lines", field: "destination" },
+                ],
+                name,
+                { name }
+            );
+
+            alert("تم تغيير اسم المدرسة ✅");
+
+            setOpenNameModal(false);
+            window.location.reload();
+        } catch (error) {
+            console.error(error);
+            alert("حدث خطأ أثناء تغيير الاسم");
+        } finally {
+            setLoadingName(false);
+        }
+    };
+
+    const handleChangeLogo = async (e) => {
+        const file = e.target.files?.[0];
+        e.target.value = "";
+
+        if (!file) return;
+
+        if (!file.type.startsWith("image/")) {
+            alert("يرجى اختيار صورة");
+            return;
+        }
+
+        try {
+            setLoadingLogo(true);
+
+            const logoRef = ref(getStorage(), `school_logos/${Date.now()}_${file.name}`);
+            await uploadBytes(logoRef, file);
+            const logoURL = await getDownloadURL(logoRef);
+
+            await applySchoolUpdates(
+                [
+                    { col: "schoolAdmins", field: "school_logo", onlyIfExists: true },
+                    { col: "employees", field: "school_logo", onlyIfExists: true },
+                    { col: "teachers", field: "school_logo", onlyIfExists: true },
+                    { col: "students", field: "school_logo", onlyIfExists: true },
+                ],
+                logoURL,
+                { logo_url: logoURL }
+            );
+
+            alert("تم تغيير شعار المدرسة ✅");
+            window.location.reload();
+        } catch (error) {
+            console.error(error);
+            alert("حدث خطأ أثناء تغيير الشعار");
+        } finally {
+            setLoadingLogo(false);
+        }
+    };
+
     if (loading) {
         return (
         <div className="loader">
@@ -328,6 +443,37 @@ const SchoolDetails = () => {
     return (
         <div className="school-details-container">
             {/* Header Card */}
+            <Modal
+                title="تغيير اسم المدرسة"
+                open={openNameModal}
+                onCancel={() => setOpenNameModal(false)}
+                footer={null}
+                centered
+            >
+                <div className="create-school-form">
+                    <input
+                        placeholder="اسم المدرسة الجديد"
+                        value={newSchoolName}
+                        onChange={(e) => setNewSchoolName(e.target.value)}
+                    />
+
+                    <p className="modal-hint">
+                        سيتغير الاسم في بيانات المدرسة والطلاب والخطوط وحسابات المشرفين والموظفين والمعلمين.
+                    </p>
+
+                    {loadingName ? (
+                        <div className="btn-loading">
+                            <ClipLoader size={15} color="#fff" />
+                        </div>
+                    ) : (
+                        <button className="create-submit" onClick={handleRenameSchool}>
+                            حفظ
+                        </button>
+                    )}
+                </div>
+            </Modal>
+
+            {/* Header Card */}
             <div className="school-card">
                 <div className="school-card-inner">
                     <div className="school-logo-box">
@@ -340,6 +486,33 @@ const SchoolDetails = () => {
                     <div className="school-name-box">
                         <h2>{school.name}</h2>
                         <p>{school.country}</p>
+                        <div style={{ display: "flex", gap: "8px", marginTop: "8px", justifyContent: "center" }}>
+                            <div
+                                className="create-btn"
+                                style={{ height: "25px" }}
+                                onClick={openRenameModal}
+                            >
+                                <p>تغيير اسم المدرسة</p>
+                            </div>
+                            <div
+                                className="create-btn"
+                                style={{ height: "25px" }}
+                                onClick={() => !loadingLogo && logoInputRef.current?.click()}
+                            >
+                                {loadingLogo ? (
+                                    <ClipLoader size={12} color="#fff" />
+                                ) : (
+                                    <p>تغيير شعار المدرسة</p>
+                                )}
+                            </div>
+                            <input
+                                ref={logoInputRef}
+                                type="file"
+                                accept="image/*"
+                                style={{ display: "none" }}
+                                onChange={handleChangeLogo}
+                            />
+                        </div>
                     </div>
                 </div>
                 <div className="back-btn" onClick={() => router.push("/")}>

@@ -3,8 +3,7 @@ import React,{useState} from 'react'
 import '../style.css'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { collection, getDocs, query, where } from "firebase/firestore"
-import { DB } from '../../firebaseConfig'
+import { supabase, emailFor } from '../../supabaseClient'
 import ClipLoader from "react-spinners/ClipLoader"
 import Image from 'next/image'
 import logo_image from '../../images/notification-icon.png'
@@ -19,31 +18,30 @@ const Login = () => {
 
   const handleLogin = async (e) => {
     e.preventDefault()
+    setError('')
     setLoading(true)
 
     try {
-      // Query Firestore for admin credentials
-      const q = query(
-        collection(DB, "admins"),
-        where("username", "==", username),
-        where("password", "==", password)
-      );
+      const { data, error: signInError } = await supabase.auth.signInWithPassword({
+        email: emailFor('team', username),
+        password,
+      })
 
-      const querySnapshot = await getDocs(q);
+      if (signInError || !data.user) throw new Error('invalid')
 
-      if (!querySnapshot.empty) {
-        const userData = querySnapshot.docs[0].data();     
+      // Only team accounts may use this dashboard
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('role, is_banned')
+        .eq('id', data.user.id)
+        .maybeSingle()
 
-        localStorage.setItem('adminLoggedIn', true)
-        localStorage.setItem('adminDahboardName', userData.dashboard_name)
-
-        setTimeout(() => {
-          router.push("/");
-        }, 300);
-
-      } else {
-        setError('يرجى التثبت من المعلومات المدرجة')
+      if (!profile || profile.role !== 'team' || profile.is_banned) {
+        await supabase.auth.signOut()
+        throw new Error('invalid')
       }
+
+      router.push('/')
     } catch (err) {
       setError('يرجى التثبت من المعلومات المدرجة')
     }finally {

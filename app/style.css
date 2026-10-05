@@ -957,7 +957,7 @@
 }
 .drivers-table-header {
   display: grid;
-  grid-template-columns: 2fr 1.5fr 1.5fr 1fr 1fr;
+  grid-template-columns: 2fr 1.5fr 1.5fr 1fr 2fr;
   background: #f3f4f6;
   padding: 12px;
   direction: rtl;
@@ -969,7 +969,7 @@
 }
 .drivers-table-row {
   display: grid;
-  grid-template-columns: 2fr 1.5fr 1.5fr 1fr 1fr;
+  grid-template-columns: 2fr 1.5fr 1.5fr 1fr 2fr;
   padding: 12px;
   border-top: 1px solid #e5e7eb;
   direction: rtl;

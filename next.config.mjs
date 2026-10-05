@@ -1,4 +1,4 @@
-import path from "path";
+﻿import path from "path";
 import { fileURLToPath } from "url";
 
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
@@ -10,7 +10,7 @@ const nextConfig = {
         remotePatterns: [
             {
                 protocol: 'https',
-                hostname: 'firebasestorage.googleapis.com',
+                hostname: '*.supabase.co',
             },
         ],
     },

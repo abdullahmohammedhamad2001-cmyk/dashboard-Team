@@ -1,15 +1,23 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { doc, getDoc, updateDoc, setDoc } from "firebase/firestore";
-import { ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
-import { DB, STORAGE } from "../firebaseConfig";
+import { supabase, publicUrl, storageName, imageError } from "../supabaseClient";
 import ClipLoader from "react-spinners/ClipLoader";
 import { IoClose } from "react-icons/io5";
 import "../app/style.css";
 
 const MAX_CAROUSEL_IMAGES = 3;
-const CAROUSEL_DOC_REF = () => doc(DB, "app_settings", "global_carousel");
+const BUCKET = "global-carousel";
+
+// Settings row holds only the storage paths; the public URL is derived from them
+const saveImages = async (images) => {
+    const { error } = await supabase.from("app_settings").upsert({
+        key: "global_carousel",
+        value: { images: images.map((i) => ({ path: i.path })) },
+    });
+
+    if (error) throw error;
+};
 
 const Carousel = () => {
     const [images, setImages] = useState([]);
@@ -21,8 +29,20 @@ const Carousel = () => {
     useEffect(() => {
         const fetchImages = async () => {
             try {
-                const snap = await getDoc(CAROUSEL_DOC_REF());
-                setImages(snap.exists() ? snap.data().images || [] : []);
+                const { data, error } = await supabase
+                    .from("app_settings")
+                    .select("value")
+                    .eq("key", "global_carousel")
+                    .maybeSingle();
+
+                if (error) throw error;
+
+                setImages(
+                    (data?.value?.images || []).map((i) => ({
+                        path: i.path,
+                        url: publicUrl(BUCKET, i.path),
+                    }))
+                );
             } catch (err) {
                 console.error(err);
             } finally {
@@ -39,6 +59,12 @@ const Carousel = () => {
         e.target.value = "";
         if (!file) return;
 
+        const invalid = imageError(file);
+        if (invalid) {
+            alert(invalid);
+            return;
+        }
+
         if (images.length >= MAX_CAROUSEL_IMAGES) {
             alert(`الحد الأقصى ${MAX_CAROUSEL_IMAGES} صور`);
             return;
@@ -47,15 +73,17 @@ const Carousel = () => {
         try {
             setUploading(true);
 
-            const filePath = `global_carousel/${Date.now()}_${file.name}`;
-            const fileRef = storageRef(STORAGE, filePath);
+            const filePath = storageName(file);
 
-            await uploadBytes(fileRef, file);
-            const url = await getDownloadURL(fileRef);
+            const { error: uploadError } = await supabase.storage
+                .from(BUCKET)
+                .upload(filePath, file, { contentType: file.type });
 
-            const newImages = [...images, { url, path: filePath }];
+            if (uploadError) throw uploadError;
 
-            await setDoc(CAROUSEL_DOC_REF(), { images: newImages }, { merge: true });
+            const newImages = [...images, { url: publicUrl(BUCKET, filePath), path: filePath }];
+
+            await saveImages(newImages);
             setImages(newImages);
 
         } catch (error) {
@@ -74,15 +102,13 @@ const Carousel = () => {
             const image = images[index];
             const newImages = images.filter((_, i) => i !== index);
 
+            await saveImages(newImages);
+
             if (image?.path) {
-                try {
-                    await deleteObject(storageRef(STORAGE, image.path));
-                } catch (err) {
-                    console.warn("Storage file already removed:", err);
-                }
+                const { error } = await supabase.storage.from(BUCKET).remove([image.path]);
+                if (error) console.warn("Storage file not removed:", error);
             }
 
-            await updateDoc(CAROUSEL_DOC_REF(), { images: newImages });
             setImages(newImages);
 
         } catch (error) {

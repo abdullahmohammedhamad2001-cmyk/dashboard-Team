@@ -3,6 +3,7 @@
 import React, { useState, useMemo } from "react";
 import { useGlobalState } from "../globalState";
 import { useRouter } from "next/navigation";
+import { supabase } from "../supabaseClient";
 import ClipLoader from "react-spinners/ClipLoader";
 import {
   MdSchool,
@@ -34,7 +35,7 @@ const ARABIC_MONTHS = [
   "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر",
 ];
 
-// Firestore Timestamp, Date, or ISO string -> Date
+// Date or ISO string -> Date
 const toDate = (value) => {
   if (!value) return null;
   if (typeof value.toDate === "function") return value.toDate();
@@ -51,17 +52,13 @@ const Main = () => {
   const [loggingOut, setLoggingOut] = useState(false);
 
   //Logout
-  const handleLogout = () => {
+  const handleLogout = async () => {
     setLoggingOut(true);
 
-    // let UI update first
-    setTimeout(() => {
-      localStorage.removeItem("adminLoggedIn"); 
-      localStorage.removeItem("adminDahboardName"); 
-      sessionStorage.clear();
+    await supabase.auth.signOut();
+    sessionStorage.clear();
 
-      router.push("/login");
-    }, 300);
+    router.push("/login");
   };
 
   const stats = [

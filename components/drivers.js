@@ -1,9 +1,7 @@
 "use client";
 
 import React, { useState, useMemo } from "react";
-import { doc, getDoc, setDoc, deleteDoc, updateDoc, collection, query, where, getDocs } from "firebase/firestore";
-import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
-import { DB } from "../firebaseConfig";
+import { supabase, storageName, adminAccounts, imageError } from "../supabaseClient";
 import { useGlobalState } from "../globalState";
 import { useRouter } from "next/navigation";
 import ClipLoader from "react-spinners/ClipLoader";
@@ -11,7 +9,7 @@ import { Modal } from "antd";
 import '../app/style.css';
 
 const Drivers = () => {
-  const { drivers, loading } = useGlobalState();
+  const { drivers, loading, refresh } = useGlobalState();
   const router = useRouter();
 
   const [nameFilter, setNameFilter] = useState("");
@@ -29,7 +27,7 @@ const Drivers = () => {
 
   const filteredDrivers = useMemo(() => {
     return drivers.filter((d) =>
-      !nameFilter || d.full_name?.includes(nameFilter)
+      !nameFilter || d.name?.includes(nameFilter)
     );
   }, [drivers, nameFilter]);
 
@@ -40,36 +38,43 @@ const Drivers = () => {
     setDriverName("");
   };
 
-  // 🔐 Generate password
-  const generatePassword = (length = 8) => {
-    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
-    let password = "";
-    for (let i = 0; i < length; i++) {
-      password += chars[Math.floor(Math.random() * chars.length)];
-    }
-    return password;
-  };
-
-  // 📱 Normalize Iraqi phone
+  // Normalize Iraqi phone
   const normalizePhone = (phone) => {
-    let cleaned = phone.replace(/\D/g, ""); // remove non-numbers
+    let cleaned = phone.replace(/\D/g, "");
 
     if (cleaned.startsWith("07")) {
-      cleaned = cleaned.slice(1); // remove leading 0 → 7XXXXXXXXX
+      cleaned = cleaned.slice(1);
     }
 
-    if (!cleaned.startsWith("7")) {
-      return null;
-    }
-
-    if (cleaned.length !== 10) {
+    if (!cleaned.startsWith("7") || cleaned.length !== 10) {
       return null;
     }
 
     return cleaned;
   };
 
-  // 🚀 Create driver
+  // Passwords are no longer stored in readable form; this issues a new one
+  const handleResetPassword = async (driver) => {
+    if (!confirm(`هل تريد إنشاء كلمة مرور جديدة للسائق "${driver.name}"؟`)) return;
+
+    try {
+      setDeletingId(driver.id);
+
+      const result = await adminAccounts({
+        action: "reset_password",
+        profileId: driver.profile_id,
+      });
+
+      setNewDriverCredentials({ username: result.username, password: result.password });
+    } catch (error) {
+      console.error(error);
+      alert("حدث خطأ أثناء تغيير كلمة المرور");
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  // Create driver
   const handleCreateDriver = async () => {
     if (!driverName ||!driverPhoneNumber ||!driverCarType ||!driverCarPlate ||!driverCarSeats ||!driverPersonalImageFile ||!driverCarImageFile) {
       alert("يرجى ملء جميع الحقول");
@@ -81,6 +86,12 @@ const Drivers = () => {
       return;
     }
 
+    const imageProblem = imageError(driverPersonalImageFile) || imageError(driverCarImageFile);
+    if (imageProblem) {
+      alert(imageProblem);
+      return;
+    }
+
     // ✅ Normalize phone
     const normalizedPhone = normalizePhone(driverPhoneNumber);
 
@@ -89,67 +100,45 @@ const Drivers = () => {
       return;
     }
 
+    let uploadedPaths = [];
+
     try {
       setLoadingCreate(true);
 
-      // ✅ Check uniqueness (doc id)
-      const driverRef = doc(DB, "drivers", normalizedPhone);
-      const existingDoc = await getDoc(driverRef);
-
-      if (existingDoc.exists()) {
+      if (drivers.some((d) => d.id === normalizedPhone)) {
         alert("رقم الهاتف مستخدم بالفعل");
         return;
       }
 
-      const password = generatePassword();
+      const media = supabase.storage.from("driver-media");
 
-      const storage = getStorage();
-
-      // ✅ Upload personal image
-      const personalRef = ref(
-        storage,
-        `drivers/personal_${Date.now()}_${driverPersonalImageFile.name}`
-      );
-      await uploadBytes(personalRef, driverPersonalImageFile);
-      const personalURL = await getDownloadURL(personalRef);
-
-      // ✅ Upload car image
-      const carRef = ref(
-        storage,
-        `drivers/car_${Date.now()}_${driverCarImageFile.name}`
-      );
-      await uploadBytes(carRef, driverCarImageFile);
-      const carURL = await getDownloadURL(carRef);
-
-      // ✅ Default Baghdad location
-      const defaultLocation = {
-        latitude: 33.3152,
-        longitude: 44.3661,
+      const upload = async (prefix, file) => {
+        const path = `${normalizedPhone}/${prefix}_${storageName(file)}`;
+        const { error } = await media.upload(path, file, { contentType: file.type });
+        if (error) throw error;
+        uploadedPaths.push(path);
+        return path;
       };
 
-      // ✅ Create driver with phone as ID
-      await setDoc(driverRef, {
-        name: driverName,
-        phone_number: normalizedPhone,
-        username: normalizedPhone,
-        password,
-        personal_image: personalURL,
+      const personalPath = await upload("personal", driverPersonalImageFile);
+      const carPath = await upload("car", driverCarImageFile);
+
+      const result = await adminAccounts({
+        action: "create_driver",
+        name: driverName.trim(),
+        phone: normalizedPhone,
         car_type: driverCarType,
-        car_plate: driverCarPlate,
+        car_plate: driverCarPlate.trim(),
         car_seats: Number(driverCarSeats),
-        car_image: carURL,
-        lines: [],
-        location: defaultLocation,
-        is_active: true,
-        created_at: new Date(),
+        personal_image_path: personalPath,
+        car_image_path: carPath,
       });
 
       alert("تم إنشاء السائق بنجاح ✅");
 
-      // ✅ Show login credentials to the admin
-      setNewDriverCredentials({ username: normalizedPhone, password });
+      // Show login credentials to the admin (the password cannot be read again later)
+      setNewDriverCredentials({ username: result.username, password: result.password });
 
-      // ✅ Reset
       closeCreateModal();
       setDriverName("");
       setDriverPhoneNumber("");
@@ -159,46 +148,36 @@ const Drivers = () => {
       setDriverPersonalImageFile(null);
       setDriverCarImageFile(null);
 
+      await refresh();
     } catch (error) {
       console.error(error);
-      alert("حدث خطأ أثناء إنشاء السائق");
+
+      // Do not leave orphaned images behind
+      if (uploadedPaths.length) {
+        await supabase.storage.from("driver-media").remove(uploadedPaths);
+      }
+
+      alert(
+        error.message === "phone_in_use" || error.message === "login_in_use"
+          ? "رقم الهاتف مستخدم بالفعل"
+          : "حدث خطأ أثناء إنشاء السائق"
+      );
     } finally {
       setLoadingCreate(false);
     }
   };
 
-  // 🗑️ Delete driver and all related data
+  // Delete driver, its login account and images (done server-side)
   const handleDeleteDriver = async (driver) => {
     if (!confirm(`هل تريد حذف السائق "${driver.name}" نهائياً؟ سيتم حذف جميع بياناته وإخراجه من التطبيق`)) return;
 
     try {
       setDeletingId(driver.id);
 
-      // ✅ Unassign driver from any lines
-      const linesQuery = query(collection(DB, "lines"), where("driver_id", "==", driver.id));
-      const linesSnap = await getDocs(linesQuery);
-      await Promise.all(
-        linesSnap.docs.map((lineDoc) => updateDoc(doc(DB, "lines", lineDoc.id), { driver_id: null }))
-      );
-
-      // ✅ Delete stored images (ignore errors if already missing)
-      const storage = getStorage();
-      await Promise.all(
-        [driver.personal_image, driver.car_image].map(async (url) => {
-          if (!url) return;
-          try {
-            await deleteObject(ref(storage, url));
-          } catch (e) {
-            console.warn("Could not delete image:", e);
-          }
-        })
-      );
-
-      // ✅ Delete driver document (revokes app login)
-      await deleteDoc(doc(DB, "drivers", driver.id));
+      await adminAccounts({ action: "delete_driver", driverId: driver.id });
 
       alert("تم حذف السائق بنجاح ✅");
-      window.location.reload();
+      await refresh();
     } catch (error) {
       console.error(error);
       alert("حدث خطأ أثناء حذف السائق");
@@ -331,7 +310,7 @@ const Drivers = () => {
           <span>الهاتف</span>
           <span>نوع السيارة</span>
           <span>عدد الخطوط</span>
-          <span>حذف</span>
+          <span>إجراءات</span>
         </div>
 
         {loading ? (
@@ -364,7 +343,18 @@ const Drivers = () => {
                 {driver.lines?.length || 0}
               </span>
 
-              <span>
+              <span style={{ display: "flex", gap: "6px", justifyContent: "center", alignItems: "center" }}>
+                <button
+                  className="create-btn"
+                  style={{ height: "26px", padding: "0 10px", whiteSpace: "nowrap" }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleResetPassword(driver);
+                  }}
+                  disabled={deletingId === driver.id}
+                >
+                  كلمة مرور جديدة
+                </button>
                 <button
                   className="delete-btn small"
                   onClick={(e) => {

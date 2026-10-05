@@ -1,8 +1,7 @@
 "use client";
 
 import React, { useState, useMemo } from "react";
-import { query, collection, orderBy, limit, getDocs,addDoc } from "firebase/firestore";
-import { DB } from "../firebaseConfig";
+import { createLine } from "../supabaseClient";
 import { useGlobalState } from "../globalState";
 import ClipLoader from "react-spinners/ClipLoader";
 import { useRouter } from "next/navigation";
@@ -10,7 +9,7 @@ import { Modal } from "antd";
 import "../app/style.css";
 
 const Lines = () => {
-  const { lines, schools, drivers, loading } = useGlobalState();
+  const { lines, schools, drivers, loading, refresh } = useGlobalState();
   const router = useRouter();
 
   const [nameFilter, setNameFilter] = useState("");
@@ -72,26 +71,6 @@ const Lines = () => {
     setOpenModal(false);
   };
 
-  //Get next line number
-  const getNextLineNumber = async () => {
-    const q = query(
-      collection(DB, "lines"),
-      orderBy("line_number", "desc"),
-      limit(1)
-    );
-
-    const snap = await getDocs(q);
-
-    if (snap.empty) return "L001";
-
-    const last = snap.docs[0].data().line_number;
-    const number = parseInt(last.replace("L", ""));
-
-    const next = number + 1;
-
-    return `L${String(next).padStart(3, "0")}`;
-  };
-
   //Create new line
   const handleCreateLine = async () => {
     if (!selectedSchool) {
@@ -110,24 +89,15 @@ const Lines = () => {
         return;
       }
 
-      const formattedNumber = await getNextLineNumber();
-
       // A school may own any number of lines, each with its own driver
       const schoolLinesCount = lines.filter((l) => l.school_id === school.id).length;
 
-      // ✅ Create doc
-      await addDoc(collection(DB, "lines"), {
-        line_number: formattedNumber,
-        line_name: newLineName.trim() || `خط ${schoolLinesCount + 1}`,
-        destination: school.name,
-        destination_location: school.location || null,
-        school_id: school.id,
-        driver_id: null,
-        driver_name: null,
-        car_type: null,
-        riders: [],
-        created_at: new Date(),
+      const formattedNumber = await createLine({
+        schoolId: school.id,
+        name: newLineName.trim() || `خط ${schoolLinesCount + 1}`,
       });
+
+      await refresh();
 
       alert(`تم إنشاء الخط ${formattedNumber} ✅`);
 

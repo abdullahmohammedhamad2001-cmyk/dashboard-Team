@@ -1,8 +1,7 @@
 "use client";
 import React, { useState } from "react";
 import Link from "next/link";
-import { addDoc, collection } from "firebase/firestore";
-import { DB } from "../../firebaseConfig";
+import { supabase } from "../../supabaseClient";
 import ClipLoader from "react-spinners/ClipLoader"
 import Image from 'next/image'
 import logo_image from '../../images/notification-icon.png'
@@ -16,19 +15,32 @@ const DeleteAccountRequest = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setLoading(true)
-    if (!phoneNumber) {
+    setError("");
+    setSuccess("");
+
+    const phone = phoneNumber.replace(/[\s-]/g, "");
+
+    if (!phone) {
       setError("الرجاء ادخال رقم الهاتف");
       return;
     }
 
+    if (!/^[0-9+]{6,16}$/.test(phone)) {
+      setError("رقم الهاتف غير صالح");
+      return;
+    }
+
+    setLoading(true)
+
     try {
-      // Send deletion request to Firebase
-      await addDoc(collection(DB, "deleteRequests"), {
-        phoneNumber,
-        reason,
-        requestedAt: new Date().toISOString(),
+      const { error: insertError } = await supabase.from("delete_requests").insert({
+        id: crypto.randomUUID(),
+        phone_number: phone,
+        reason: reason.trim().slice(0, 500),
       });
+
+      if (insertError) throw insertError;
+
       setSuccess("تم ارسال طلب مسح الحساب بنجاح");
       setPhoneNumber("");
       setReason("");

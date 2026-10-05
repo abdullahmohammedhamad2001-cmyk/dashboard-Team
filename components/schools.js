@@ -2,16 +2,14 @@
 
 import React, { useMemo, useState } from "react";
 import { useGlobalState } from "../globalState";
-import { collection, addDoc } from "firebase/firestore";
-import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
-import { DB } from "../firebaseConfig";
+import { supabase, storageName, imageError } from "../supabaseClient";
 import { useRouter } from "next/navigation";
 import ClipLoader from "react-spinners/ClipLoader";
 import { Modal } from "antd";
 import '../app/style.css';
 
 const Schools = () => {
-  const { schools, students, teachers, employees, loading } = useGlobalState();
+  const { schools, students, teachers, employees, loading, refresh } = useGlobalState();
   const router = useRouter();
 
   const [nameFilter, setNameFilter] = useState("");
@@ -79,31 +77,31 @@ const Schools = () => {
     try {
       setLoadingCreate(true);
 
-      let logoURL = "";
+      let logoPath = null;
 
-      // ✅ Upload logo
+      // Upload logo
       if (schoolLogoFile) {
-        const storage = getStorage();
-        const logoRef = ref(
-          storage,
-          `school_logos/${Date.now()}_${schoolLogoFile.name}`
-        );
+        logoPath = storageName(schoolLogoFile);
 
-        await uploadBytes(logoRef, schoolLogoFile);
-        logoURL = await getDownloadURL(logoRef);
+        const { error: uploadError } = await supabase.storage
+          .from("school-logos")
+          .upload(logoPath, schoolLogoFile, { contentType: schoolLogoFile.type });
+
+        if (uploadError) throw uploadError;
       }
 
-      // ✅ Save to Firestore
-      await addDoc(collection(DB, "schools"), {
-        name: schoolName,
-        location: {
-          latitude,
-          longitude,
-        },
+      const { error } = await supabase.from("schools").insert({
+        id: crypto.randomUUID(),
+        name: schoolName.trim(),
+        location_lat: latitude,
+        location_lng: longitude,
         country,
-        logo_url: logoURL || null,
-        created_at: new Date(),
+        logo_path: logoPath,
       });
+
+      if (error) throw error;
+
+      await refresh();
 
       alert("تم إنشاء المدرسة بنجاح ✅");
 
@@ -157,9 +155,17 @@ const Schools = () => {
             type="file"
             accept="image/*"
             onChange={(e) => {
-              if (e.target.files[0]) {
-                setSchoolLogoFile(e.target.files[0]);
+              const file = e.target.files[0];
+              if (!file) return;
+
+              const invalid = imageError(file);
+              if (invalid) {
+                alert(invalid);
+                e.target.value = "";
+                return;
               }
+
+              setSchoolLogoFile(file);
             }}
           />
 

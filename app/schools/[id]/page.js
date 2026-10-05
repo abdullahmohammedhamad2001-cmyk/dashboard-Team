@@ -2,9 +2,7 @@
 
 import React, { useMemo,useRef,useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { collection,query,where,orderBy,limit,getDocs,addDoc,doc,runTransaction,serverTimestamp,writeBatch } from "firebase/firestore";
-import { DB } from "../../../firebaseConfig";
-import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { supabase, storageName, adminAccounts, createLine, imageError } from "../../../supabaseClient";
 import {useGlobalState} from '../../../globalState';
 import { Modal } from "antd";
 import ClipLoader from "react-spinners/ClipLoader";
@@ -14,7 +12,13 @@ import "../../style.css";
 const SchoolDetails = () => {
     const { id } = useParams();
     const router = useRouter();
-    const { schools, employees, students, lines, drivers, loading } = useGlobalState();
+    const { schools, employees, students, lines, drivers, loading, refresh } = useGlobalState();
+
+    const [credentials, setCredentials] = useState(null);
+    const [resettingId, setResettingId] = useState(null);
+    const [uploadingPhotoId, setUploadingPhotoId] = useState(null);
+    const photoInputRef = useRef(null);
+    const photoTargetRef = useRef(null);
 
     const [openOwnerModal, setOpenOwnerModal] = useState(false);
     const [ownerName, setOwnerName] = useState("");
@@ -75,17 +79,6 @@ const SchoolDetails = () => {
     const canAssignStudent = (student) =>
         Boolean(student.linked_parent && student.home_location);
 
-    const getNextLineNumber = async () => {
-        const snap = await getDocs(
-            query(collection(DB, "lines"), orderBy("line_number", "desc"), limit(1))
-        );
-
-        if (snap.empty) return "L001";
-
-        const number = parseInt(snap.docs[0].data().line_number?.replace("L", "")) || 0;
-        return `L${String(number + 1).padStart(3, "0")}`;
-    };
-
     // A school can hold an unlimited number of lines, each with its own driver
     const handleCreateLine = async () => {
         if (!school) return;
@@ -93,26 +86,16 @@ const SchoolDetails = () => {
         try {
             setLoadingLine(true);
 
-            const lineNumber = await getNextLineNumber();
-
-            await addDoc(collection(DB, "lines"), {
-                line_number: lineNumber,
-                line_name: newLineName.trim() || `خط ${schoolLines.length + 1}`,
-                destination: school.name,
-                destination_location: school.location || null,
-                school_id: school.id,
-                driver_id: null,
-                driver_name: null,
-                car_type: null,
-                riders: [],
-                created_at: new Date(),
+            const lineNumber = await createLine({
+                schoolId: school.id,
+                name: newLineName.trim() || `خط ${schoolLines.length + 1}`,
             });
 
             alert(`تم إنشاء الخط ${lineNumber} ✅`);
 
             setNewLineName("");
             setOpenLineModal(false);
-            window.location.reload();
+            await refresh();
         } catch (error) {
             console.error(error);
             alert("حدث خطأ أثناء إنشاء الخط");
@@ -130,35 +113,17 @@ const SchoolDetails = () => {
         try {
             setLoadingAssign(true);
 
-            const lineRef = doc(DB, "lines", selectedLine.id);
-            const studentRef = doc(DB, "students", assignStudent.id);
+            // Only a student without a line is updated; the driver follows from the line
+            const { data, error } = await supabase
+                .from("students")
+                .update({ line_id: selectedLine.id })
+                .eq("id", assignStudent.id)
+                .is("line_id", null)
+                .select("id");
 
-            let alreadyAssigned = false;
+            if (error) throw error;
 
-            await runTransaction(DB, async (transaction) => {
-                const lineDoc = await transaction.get(lineRef);
-                const studentDoc = await transaction.get(studentRef);
-
-                if (studentDoc.data()?.line_id) {
-                    alreadyAssigned = true;
-                    return;
-                }
-
-                const riders = lineDoc.data()?.riders || [];
-
-                transaction.update(studentRef, {
-                    line_id: selectedLine.id,
-                    driver_id: lineDoc.data()?.driver_id || null,
-                });
-
-                transaction.update(lineRef, {
-                    riders: riders.includes(assignStudent.id)
-                        ? riders
-                        : [...riders, assignStudent.id],
-                });
-            });
-
-            if (alreadyAssigned) {
+            if (!data?.length) {
                 alert("هذا الطالب مضاف لخط بالفعل");
                 return;
             }
@@ -167,7 +132,7 @@ const SchoolDetails = () => {
 
             setAssignStudent(null);
             setSelectedLine(null);
-            window.location.reload();
+            await refresh();
         } catch (error) {
             console.error(error);
             alert("حدث خطأ أثناء التعيين");
@@ -198,16 +163,6 @@ const SchoolDetails = () => {
 
         return grouped;
     }, [employees, id, school]);
-
-    //Generate owner doc password
-    const generatePassword = (length = 8) => {
-        const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
-        let password = "";
-        for (let i = 0; i < length; i++) {
-            password += chars[Math.floor(Math.random() * chars.length)];
-        }
-        return password;
-    };
 
     // 📱 Normalize phone based on country
     const normalizePhoneByCountry = (phone, country) => {
@@ -257,96 +212,60 @@ const SchoolDetails = () => {
         try {
             setLoadingOwner(true);
 
-            const password = generatePassword();
-
-            //Check phone uniqueness
-            const q = query(
-                collection(DB, "employees"),
-                where("phone_number", "==", normalizedPhone)
-            );
-
-            const snap = await getDocs(q);
-
-            if (!snap.empty) {
-                alert('رقم الهاتف مستخدم الرجاء ادخال رقم اخر');
-                return
-            }
-
-            await runTransaction(DB, async (transaction) => {
-                const employeeRef = doc(collection(DB, "employees"));
-
-                transaction.set(employeeRef, {
-                    name: ownerName,
-                    phone_number: normalizedPhone,
-                    username:normalizedPhone,
-                    password,
-                    school_id: school.id,
-                    job_title: "المشرف العام",
-                    country: school.country,
-                    is_active: true,
-                    account_deleted: false,
-                    created_at: serverTimestamp(),
-                });
-
-                // create school admin
-                const adminRef = doc(DB, "schoolAdmins", normalizedPhone);
-
-                transaction.set(adminRef, {
-                    admin_id: employeeRef.id,
-                    name: ownerName,
-                    username: normalizedPhone,
-                    password,
-                    role: "admin",
-                    job_title: "المشرف العام",
-                    school: school.name,
-                    school_id: school.id,
-                    school_logo: school.logo_url || null,
-                    country: school.country,
-                    account_banned: false,
-                });
+            // The account is created server-side; the password is shown only once
+            const result = await adminAccounts({
+                action: "create_school_owner",
+                schoolId: school.id,
+                name: ownerName.trim(),
+                phone: normalizedPhone,
             });
-
-            alert("تم إضافة المالك ✅");
 
             setOwnerName("");
             setOwnerPhone("");
             setOpenOwnerModal(false);
+            setCredentials({ username: result.username, password: result.password });
 
+            await refresh();
         } catch (error) {
             console.error(error);
-            alert("خطأ أثناء إضافة المالك");
+            alert(
+                error.message === "phone_in_use" || error.message === "login_in_use"
+                    ? "رقم الهاتف مستخدم الرجاء ادخال رقم اخر"
+                    : "خطأ أثناء إضافة المالك"
+            );
         } finally {
             setLoadingOwner(false);
+        }
+    };
+
+    const handleResetOwnerPassword = async (emp) => {
+        if (!emp.profile_id) {
+            alert("لا يوجد حساب دخول مرتبط بهذا المشرف");
+            return;
+        }
+
+        if (!confirm(`هل تريد إنشاء كلمة مرور جديدة للمشرف "${emp.name}"؟`)) return;
+
+        try {
+            setResettingId(emp.id);
+
+            const result = await adminAccounts({
+                action: "reset_password",
+                profileId: emp.profile_id,
+            });
+
+            setCredentials({ username: result.username, password: result.password });
+        } catch (error) {
+            console.error(error);
+            alert("حدث خطأ أثناء تغيير كلمة المرور");
+        } finally {
+            setResettingId(null);
         }
     };
 
     const openRenameModal = () => {
         setNewSchoolName(school?.name || "");
         setOpenNameModal(true);
-    };
-
-    // School data is copied into several collections; the school document is written last so a failed run can be retried
-    const applySchoolUpdates = async (targets, value, schoolPatch) => {
-        const updates = [];
-
-        for (const target of targets) {
-            const snap = await getDocs(
-                query(collection(DB, target.col), where("school_id", "==", id))
-            );
-
-            snap.docs.forEach((d) => {
-                if (target.onlyIfExists && d.data()[target.field] === undefined) return;
-                updates.push({ ref: d.ref, data: { [target.field]: value } });
-            });
-        }
-
-        updates.push({ ref: doc(DB, "schools", id), data: schoolPatch });
-
-        for (let i = 0; i < updates.length; i += 400) {
-            const batch = writeBatch(DB);
-            updates.slice(i, i + 400).forEach((u) => batch.update(u.ref, u.data));
-            await batch.commit();
-        }
     };
 
     const handleRenameSchool = async () => {
@@ -365,22 +284,15 @@ const SchoolDetails = () => {
         try {
             setLoadingName(true);
 
-            await applySchoolUpdates(
-                [
-                    { col: "schoolAdmins", field: "school", onlyIfExists: true },
-                    { col: "employees", field: "school", onlyIfExists: true },
-                    { col: "teachers", field: "school", onlyIfExists: true },
-                    { col: "students", field: "destination" },
-                    { col: "lines", field: "destination" },
-                ],
-                name,
-                { name }
-            );
+            // The name is stored once, so every screen picks up the change
+            const { error } = await supabase.from("schools").update({ name }).eq("id", id);
+
+            if (error) throw error;
 
             alert("تم تغيير اسم المدرسة ✅");
 
             setOpenNameModal(false);
-            window.location.reload();
+            await refresh();
         } catch (error) {
             console.error(error);
             alert("حدث خطأ أثناء تغيير الاسم");
@@ -395,36 +307,89 @@ const SchoolDetails = () => {
 
         if (!file) return;
 
-        if (!file.type.startsWith("image/")) {
-            alert("يرجى اختيار صورة");
+        const invalid = imageError(file);
+        if (invalid) {
+            alert(invalid);
             return;
         }
 
         try {
             setLoadingLogo(true);
 
-            const logoRef = ref(getStorage(), `school_logos/${Date.now()}_${file.name}`);
-            await uploadBytes(logoRef, file);
-            const logoURL = await getDownloadURL(logoRef);
+            const logoPath = storageName(file);
 
-            await applySchoolUpdates(
-                [
-                    { col: "schoolAdmins", field: "school_logo", onlyIfExists: true },
-                    { col: "employees", field: "school_logo", onlyIfExists: true },
-                    { col: "teachers", field: "school_logo", onlyIfExists: true },
-                    { col: "students", field: "school_logo", onlyIfExists: true },
-                ],
-                logoURL,
-                { logo_url: logoURL }
-            );
+            const { error: uploadError } = await supabase.storage
+                .from("school-logos")
+                .upload(logoPath, file, { contentType: file.type });
+
+            if (uploadError) throw uploadError;
+
+            const { error } = await supabase
+                .from("schools")
+                .update({ logo_path: logoPath })
+                .eq("id", id);
+
+            if (error) throw error;
+
+            const oldPath = school.logo_path;
+            if (oldPath) {
+                await supabase.storage.from("school-logos").remove([oldPath]);
+            }
 
             alert("تم تغيير شعار المدرسة ✅");
-            window.location.reload();
+            await refresh();
         } catch (error) {
             console.error(error);
             alert("حدث خطأ أثناء تغيير الشعار");
         } finally {
             setLoadingLogo(false);
+        }
+    };
+
+    // The file name must be <student id>.<ext> so the parent app's read policy matches it
+    const handleStudentPhoto = async (e) => {
+        const file = e.target.files?.[0];
+        e.target.value = "";
+
+        const student = photoTargetRef.current;
+
+        if (!file || !student) return;
+
+        const invalid = imageError(file);
+        if (invalid) {
+            alert(invalid);
+            return;
+        }
+
+        const ext = (file.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
+        const path = `${id}/${student.id}.${ext}`;
+        const bucket = supabase.storage.from("student-photos");
+
+        try {
+            setUploadingPhotoId(student.id);
+
+            const { error: uploadError } = await bucket.upload(path, file, {
+                contentType: file.type,
+                upsert: true,
+            });
+            if (uploadError) throw uploadError;
+
+            const { error } = await supabase
+                .from("students")
+                .update({ photo_path: path })
+                .eq("id", student.id);
+            if (error) throw error;
+
+            if (student.photo_path && student.photo_path !== path) {
+                await bucket.remove([student.photo_path]);
+            }
+
+            await refresh();
+        } catch (error) {
+            console.error(error);
+            alert("حدث خطأ أثناء رفع صورة الطالب");
+        } finally {
+            setUploadingPhotoId(null);
         }
     };
 
@@ -442,6 +407,19 @@ const SchoolDetails = () => {
 
     return (
         <div className="school-details-container">
+            <Modal
+                title="بيانات دخول المشرف"
+                open={!!credentials}
+                onCancel={() => setCredentials(null)}
+                footer={null}
+                centered
+            >
+                <div className="driver-credentials">
+                    <p>رقم الدخول: <strong>{credentials?.username}</strong></p>
+                    <p>كلمة المرور: <strong>{credentials?.password}</strong></p>
+                    <p className="modal-hint">احفظ كلمة المرور الآن، لا يمكن عرضها مرة أخرى.</p>
+                </div>
+            </Modal>
             {/* Header Card */}
             <Modal
                 title="تغيير اسم المدرسة"
@@ -458,7 +436,7 @@ const SchoolDetails = () => {
                     />
 
                     <p className="modal-hint">
-                        سيتغير الاسم في بيانات المدرسة والطلاب والخطوط وحسابات المشرفين والموظفين والمعلمين.
+                        سيتغير الاسم في جميع شاشات التطبيقات واللوحات تلقائياً.
                     </p>
 
                     {loadingName ? (
@@ -547,7 +525,20 @@ const SchoolDetails = () => {
                             <div key={emp.id} className="school-details-table-row">
                                 <span>{emp.name}</span>
                                 <span className="phone-number">{emp.phone_number}</span>
-                                <span>{emp.password}</span>
+                                <span>
+                                    <button
+                                        className="create-btn"
+                                        style={{ height: "26px", padding: "0 10px" }}
+                                        disabled={resettingId === emp.id}
+                                        onClick={() => handleResetOwnerPassword(emp)}
+                                    >
+                                        {resettingId === emp.id ? (
+                                            <ClipLoader size={12} color="#fff" />
+                                        ) : (
+                                            "كلمة مرور جديدة"
+                                        )}
+                                    </button>
+                                </span>
                             </div>
                         ))
                     )}
@@ -620,6 +611,13 @@ const SchoolDetails = () => {
                     value={studentSearch}
                     onChange={(e) => setStudentSearch(e.target.value)}
                 />
+                <input
+                    ref={photoInputRef}
+                    type="file"
+                    accept="image/*"
+                    style={{ display: "none" }}
+                    onChange={handleStudentPhoto}
+                />
 
                 <div className="school-details-table">
                     <div className="school-details-table-header school-students-grid">
@@ -642,8 +640,19 @@ const SchoolDetails = () => {
                                     key={student.id}
                                     className="school-details-table-row school-students-grid"
                                 >
-                                    <span className="student-row-photo">
-                                        {student.photo_url ? (
+                                    <span
+                                        className="student-row-photo"
+                                        style={{ cursor: "pointer" }}
+                                        title={student.photo_url ? "تغيير الصورة" : "رفع صورة"}
+                                        onClick={() => {
+                                            if (uploadingPhotoId) return;
+                                            photoTargetRef.current = student;
+                                            photoInputRef.current?.click();
+                                        }}
+                                    >
+                                        {uploadingPhotoId === student.id ? (
+                                            <ClipLoader size={14} color="#8a6115" />
+                                        ) : student.photo_url ? (
                                             // eslint-disable-next-line @next/next/no-img-element
                                             <img src={student.photo_url} alt={student.name} />
                                         ) : (

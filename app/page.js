@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import ClipLoader from "react-spinners/ClipLoader";
+import { supabase } from "../supabaseClient";
 import {MdDashboard,MdPeople,MdDirectionsBus,MdRoute,MdSchool,MdViewCarousel,MdBusinessCenter,MdChevronLeft,MdChevronRight} from "react-icons/md";
 import './style.css';
 import Image from 'next/image'
@@ -24,12 +25,13 @@ const Dashboard = () => {
   const router = useRouter();
 
   useEffect(() => {
-    const adminLoggedIn = localStorage.getItem("adminLoggedIn");
-    if (!adminLoggedIn) {
-      router.push("/login");
-    } else {
-      setIsAuthenticated(true);
-    }
+    supabase.auth.getSession().then(({ data }) => {
+      if (!data.session) {
+        router.push("/login");
+      } else {
+        setIsAuthenticated(true);
+      }
+    });
   }, []);
 
   if (!isAuthenticated) {

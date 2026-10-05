@@ -2,8 +2,7 @@
 
 import React, { useMemo,useState } from "react";
 import { Modal } from "antd";
-import { doc, runTransaction, updateDoc } from "firebase/firestore";
-import { DB } from "../../../firebaseConfig";
+import { supabase } from "../../../supabaseClient";
 import { useParams, useRouter } from "next/navigation";
 import {useGlobalState} from '../../../globalState';
 import ClipLoader from "react-spinners/ClipLoader";
@@ -13,7 +12,7 @@ import "../../style.css";
 const LineDetails = () => {
     const { id } = useParams();
     const router = useRouter();
-    const { lines, drivers, students, loading } = useGlobalState();
+    const { lines, drivers, students, loading, refresh } = useGlobalState();
     const line = lines.find((l) => l.id === id);
 
     const [openDriverModal, setOpenDriverModal] = useState(false);
@@ -79,48 +78,23 @@ const LineDetails = () => {
         try {
             setLoadingAssign(true);
 
-            const lineRef = doc(DB, "lines", line.id);
-            const driverRef = doc(DB, "drivers", selectedDriver.id);
-
-            let alreadyAssigned = false;
-
-            await runTransaction(DB, async (transaction) => {
-                const lineDoc = await transaction.get(lineRef);
-
-                if (lineDoc.data()?.driver_id) {
-                    alreadyAssigned = true;
-                    return;
-                }
-
-                const driverDoc = await transaction.get(driverRef);
-                const driverLines = driverDoc.data()?.lines || [];
-
-                const riders = lineDoc.data()?.riders || [];
-
-                transaction.update(lineRef, {
+            // Only a line without a driver is updated; students follow the line's driver
+            const { data, error } = await supabase
+                .from("lines")
+                .update({
                     driver_id: selectedDriver.id,
                     driver_name: selectedDriver.name,
                     car_type: selectedDriver.car_type || null,
-                });
+                })
+                .eq("id", line.id)
+                .is("driver_id", null)
+                .select("id");
 
-                transaction.update(driverRef, {
-                    lines: driverLines.includes(line.id)
-                    ? driverLines
-                    : [...driverLines, line.id],
-                });
+            if (error) throw error;
 
-                for (const studentId of riders) {
-                    const studentRef = doc(DB, "students", studentId);
-
-                    transaction.update(studentRef, {
-                        driver_id: selectedDriver.id,
-                    });
-                }
-            });
-
-            // ✅ AFTER transaction
-            if (alreadyAssigned) {
+            if (!data?.length) {
                 alert("تم تعيين سائق لهذا الخط مسبقاً");
+                await refresh();
                 return;
             }
 
@@ -128,6 +102,7 @@ const LineDetails = () => {
 
             setOpenDriverModal(false);
             setSelectedDriver(null);
+            await refresh();
 
         } catch (error) {
             console.error(error);
@@ -171,65 +146,27 @@ const LineDetails = () => {
         try {
             setLoadingAddStudent(true);
 
-            const lineRef = doc(DB, "lines", line.id);
+            // Only students without a line that already have a linked parent and home location
+            const ids = selectedStudents.filter(isStudentValid).map((s) => s.id);
 
-            await runTransaction(DB, async (transaction) => {
-                // ✅ 1. READ line first
-                const lineDoc = await transaction.get(lineRef);
-                const riders = lineDoc.data()?.riders || [];
+            if (ids.length) {
+                const { error } = await supabase
+                    .from("students")
+                    .update({ line_id: line.id })
+                    .in("id", ids)
+                    .is("line_id", null)
+                    .not("linked_parent_id", "is", null)
+                    .not("home_lat", "is", null)
+                    .not("home_lng", "is", null);
 
-                let updatedRiders = [...riders];
-
-                // ✅ 2. READ ALL students first
-                const studentDocs = [];
-
-                for (const student of selectedStudents) {
-                    const studentRef = doc(DB, "students", student.id);
-                    const studentDoc = await transaction.get(studentRef);
-
-                    studentDocs.push({
-                        ref: studentRef,
-                        data: studentDoc.data(),
-                        id: student.id
-                    });
-                }
-
-                // ✅ 3. NOW DO WRITES
-                for (const student of studentDocs) {
-                    if (student.data?.line_id) continue;
-
-                    if (!student.data?.linked_parent || !student.data?.home_location) {
-                        continue;
-                    }
-
-                    const updateData = {
-                        line_id: line.id,
-                    };
-
-                    // 🔥 handle driver case (read the freshly-fetched line doc, not the
-                    // possibly-stale outer `line` state, to avoid missing a driver
-                    // assigned since this page last loaded)
-                    if (lineDoc.data()?.driver_id) {
-                        updateData.driver_id = lineDoc.data().driver_id;
-                    }
-
-                    transaction.update(student.ref, updateData);
-
-                    if (!updatedRiders.includes(student.id)) {
-                        updatedRiders.push(student.id);
-                    }
-                }
-
-                // ✅ 4. update line once
-                transaction.update(lineRef, {
-                    riders: updatedRiders,
-                });
-            });
+                if (error) throw error;
+            }
 
             alert("تم إضافة الطلاب للخط ✅");
 
             setSelectedStudents([]);
             setOpenStudentModal(false);
+            await refresh();
 
         } catch (error) {
             console.error(error);
@@ -263,12 +200,15 @@ const LineDetails = () => {
         try {
             setSavingSubscriptionId(student.id);
 
-            await updateDoc(doc(DB, "students", student.id), {
-                subscription_amount: amount,
-            });
+            const { error } = await supabase
+                .from("students")
+                .update({ subscription_amount: amount })
+                .eq("id", student.id);
+
+            if (error) throw error;
 
             setEditingSubscriptionId(null);
-            router.refresh();
+            await refresh();
         } catch (error) {
             console.error(error);
             alert("حدث خطأ أثناء حفظ مبلغ الاشتراك");
@@ -286,40 +226,16 @@ const LineDetails = () => {
         try {
             setLoadingRemoveDriver(true);
 
-            const lineRef = doc(DB, "lines", line.id);
-            const driverRef = doc(DB, "drivers", driver.id);
+            const { error } = await supabase
+                .from("lines")
+                .update({ driver_id: null, driver_name: null, car_type: null })
+                .eq("id", line.id);
 
-            await runTransaction(DB, async (transaction) => {
-                const lineDoc = await transaction.get(lineRef);
-                const driverDoc = await transaction.get(driverRef);
-
-                const riders = lineDoc.data()?.riders || [];
-                const driverLines = driverDoc.data()?.lines || [];
-
-                // ✅ remove line from driver
-                transaction.update(driverRef, {
-                    lines: driverLines.filter((l) => l !== line.id),
-                });
-
-                // ✅ reset line
-                transaction.update(lineRef, {
-                    driver_id: null,
-                    driver_name: null,
-                    car_type: null,
-                });
-
-                // ✅ reset students driver_id
-                for (const studentId of riders) {
-                    const studentRef = doc(DB, "students", studentId);
-                    transaction.update(studentRef, {
-                        driver_id: null,
-                    });
-                }
-            });
+            if (error) throw error;
 
             alert("تم إزالة السائق من الخط ✅");
 
-            router.refresh();
+            await refresh();
 
         } catch (error) {
             console.error(error);
@@ -336,29 +252,16 @@ const LineDetails = () => {
         try {
             setLoadingRemoveStudent(student.id);
 
-            const lineRef = doc(DB, "lines", line.id);
-            const studentRef = doc(DB, "students", student.id);
+            const { error } = await supabase
+                .from("students")
+                .update({ line_id: null })
+                .eq("id", student.id);
 
-            await runTransaction(DB, async (transaction) => {
-                const lineDoc = await transaction.get(lineRef);
-                const riders = lineDoc.data()?.riders || [];
-
-                // ✅ update student
-                transaction.update(studentRef, {
-                    line_id: null,
-                    driver_id: null,
-                });
-
-                // ✅ update line
-                transaction.update(lineRef, {
-                    riders: riders.filter((id) => id !== student.id),
-                });
-            });
+            if (error) throw error;
 
             alert("تم إزالة الطالب من الخط ✅");
 
-            // refresh page
-            router.refresh();
+            await refresh();
 
         } catch (error) {
             console.error(error);

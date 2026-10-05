@@ -1,18 +1,7 @@
 "use client";
 
 import React, { useMemo, useState, useEffect, useRef } from "react";
-import {
-  collection,
-  addDoc,
-  updateDoc,
-  deleteDoc,
-  doc,
-  getDocs,
-  query,
-  orderBy,
-  serverTimestamp,
-} from "firebase/firestore";
-import { DB } from "../firebaseConfig";
+import { supabase, fetchAll } from "../supabaseClient";
 import { Modal } from "antd";
 import ClipLoader from "react-spinners/ClipLoader";
 import { MdEdit, MdSearch } from "react-icons/md";
@@ -162,9 +151,8 @@ const Crm = () => {
   const fetchLeads = async () => {
     try {
       setLoading(true);
-      const q = query(collection(DB, "crm_leads"), orderBy("created_at", "desc"));
-      const snap = await getDocs(q);
-      setLeads(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      const rows = await fetchAll("crm_leads", "*", "created_at");
+      setLeads(rows.reverse());
     } catch (error) {
       console.error(error);
     } finally {
@@ -215,11 +203,13 @@ const Crm = () => {
 
       const crm_id = generateCrmId(leads);
 
-      await addDoc(collection(DB, "crm_leads"), {
+      const { error } = await supabase.from("crm_leads").insert({
         ...form,
+        id: crypto.randomUUID(),
         crm_id,
-        created_at: serverTimestamp(),
       });
+
+      if (error) throw error;
 
       setForm(emptyForm);
       setOpenAddModal(false);
@@ -264,7 +254,7 @@ const Crm = () => {
     try {
       setSaving(true);
 
-      await updateDoc(doc(DB, "crm_leads", selectedLead.id), {
+      const { error } = await supabase.from("crm_leads").update({
         institution_name: form.institution_name,
         assigned_marketer: form.assigned_marketer,
         province: form.province,
@@ -277,8 +267,10 @@ const Crm = () => {
         email: form.email,
         student_count: form.student_count,
         notes: form.notes,
-        updated_at: serverTimestamp(),
-      });
+        updated_at: new Date().toISOString(),
+      }).eq("id", selectedLead.id);
+
+      if (error) throw error;
 
       setOpenFormEditModal(false);
       setSelectedLead(null);
@@ -305,10 +297,12 @@ const Crm = () => {
 
       const { id, crm_id, created_at, ...rest } = form;
 
-      await updateDoc(doc(DB, "crm_leads", selectedLead.id), {
+      const { error } = await supabase.from("crm_leads").update({
         ...rest,
-        updated_at: serverTimestamp(),
-      });
+        updated_at: new Date().toISOString(),
+      }).eq("id", selectedLead.id);
+
+      if (error) throw error;
 
       setOpenEditModal(false);
       setSelectedLead(null);
@@ -326,7 +320,9 @@ const Crm = () => {
     if (!confirm(`هل تريد حذف "${lead.institution_name}" من CRM؟`)) return;
 
     try {
-      await deleteDoc(doc(DB, "crm_leads", lead.id));
+      const { error } = await supabase.from("crm_leads").delete().eq("id", lead.id);
+
+      if (error) throw error;
       fetchLeads();
     } catch (error) {
       console.error(error);
